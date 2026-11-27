@@ -34,7 +34,7 @@ if isinstance(w.get("pid"), int):
     # only OUR waiter: same program AND same process start time as it recorded (a reused pid has a different start)
     if os.path.join(ROOT, "team", "hooks", "idle_wake.py") in ps("args") and w.get("start") and ps("lstart") == w["start"]:
         os.kill(w["pid"], signal.SIGTERM); print("stopped the waiting idle hook", w["pid"])
-if sys.platform == "darwin" or install.LAUNCHCTL != "launchctl":
+if install.HAS_LAUNCHD:
     for n, script in install.SERVICES.items():
         label = f"com.claudecodexteam.{n}"; p = os.path.join(install.AGENTS, label + ".plist")
         if not os.path.exists(p):

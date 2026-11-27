@@ -23,6 +23,8 @@ SETTINGS = os.path.expanduser("~/.claude/settings.json")
 AGENTS = os.path.expanduser("~/Library/LaunchAgents")
 SERVICES = {"wakerd": "team/wakerd.py", "commhealth": "team/commhealth.py"}
 LAUNCHCTL = os.environ.get("TEAMKIT_LAUNCHCTL", "launchctl")   # tests substitute a fake
+HAS_LAUNCHD = (sys.platform == "darwin" and os.environ.get("TEAMKIT_NO_LAUNCHD") != "1") or "TEAMKIT_LAUNCHCTL" in os.environ   # TEAMKIT_NO_LAUNCHD=1 simulates Linux in tests
+BINDING = os.path.join(DATA, "binding.json")   # which chat + names this mailbox belongs to; kept with the mail, not in config
 NAME_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 
 
@@ -165,7 +167,7 @@ def stop_service(n):
 
 def start_services():
     """(re)start both services; raises SetupError unless both run OUR program and the daemon we launched writes a fresh heartbeat"""
-    if sys.platform != "darwin" and LAUNCHCTL == "launchctl":
+    if not HAS_LAUNCHD:
         print("  not macOS: start these yourself and keep them running:")
         for s in SERVICES.values():
             print(f"    nohup python3 {shlex.quote(os.path.join(ROOT, s))} run >/dev/null 2>&1 &")
@@ -243,12 +245,21 @@ def main():
             raise SetupError("pick a different --partner-name")
         if a.thread not in {i for _, i, _ in T}:
             raise SetupError(f"--thread {a.thread!r} is not one of your Codex chats (exact id from --list-threads)")
-        prev = (get_json(CONFIG, {}) or {}).get("codex_thread")
-        if prev and prev != a.thread:
+        bind = get_json(BINDING) if os.path.exists(BINDING) else None
+        has_mail = bool(msgs())
+        if os.path.exists(BINDING) and not isinstance(bind, dict):
+            raise SetupError(f"{BINDING} is damaged, so this mailbox's partner cannot be verified. Use a fresh copy of the kit. Nothing was changed.")
+        if bind is None and has_mail:
+            raise SetupError("This mailbox already holds messages but no record of which chat they belong to. "
+                             "Use a fresh copy of the kit. Nothing was changed.")
+        if bind and bind.get("codex_thread") != a.thread:
             raise SetupError("This copy of the kit is already paired with another Codex chat. To pair a different chat, "
                              "unzip a fresh copy of the kit into a new folder and set that one up. Nothing was changed.")
+        if bind and (bind.get("partner_name"), bind.get("claude_name")) != (a.partner_name, a.claude_name):
+            raise SetupError(f"This copy's names are fixed: partner {bind.get('partner_name')!r}, Claude {bind.get('claude_name')!r} "
+                             "(renaming would hide unanswered mail). Rerun with those names, or use a fresh copy. Nothing was changed.")
         load_settings()
-        if not a.no_services:
+        if not a.no_services and HAS_LAUNCHD:
             for n, sc in SERVICES.items():
                 if not plist_owned(f"com.claudecodexteam.{n}", sc):
                     raise SetupError(f"~/Library/LaunchAgents/com.claudecodexteam.{n}.plist belongs to another copy of this kit: run that copy's uninstall.py first. Nothing was changed.")
@@ -267,24 +278,27 @@ def main():
             os.path.join(W, "baseline.json"): read_bytes(os.path.join(W, "baseline.json")),
             os.path.join(W, "partner_log.json"): read_bytes(os.path.join(W, "partner_log.json"))}
     had_services = {n: read_bytes(os.path.join(AGENTS, f"com.claudecodexteam.{n}.plist")) for n in SERVICES}
-    was_running = {n: service_pid(f"com.claudecodexteam.{n}") is not None for n in SERVICES} if not a.no_services else {}
+    use_launchd = not a.no_services and HAS_LAUNCHD
+    was_running = {n: service_pid(f"com.claudecodexteam.{n}") is not None for n in SERVICES} if use_launchd else {}
+    keep[BINDING] = read_bytes(BINDING)
     old = get_json(CONFIG, {}) or {}
     cfg = {"claude_name": a.claude_name, "partner_name": a.partner_name, "codex_thread": a.thread, "work_dirs": work,
            "installed_at": old.get("installed_at") or time.time(),
            "handoff_thread": old.get("handoff_thread")}
     try:
-        if not a.no_services:
+        if use_launchd:
             for n in SERVICES:   # nothing may deliver while routing changes
                 if not stop_service(n):
                     raise SetupError(f"could not stop the running {n}")
         ids = [int(m["id"][1:]) for m in msgs() if str(m.get("id", ""))[1:].isdigit()]
         if not os.path.exists(os.path.join(W, "baseline.json")):   # wake only for mail sent from now on (incl. the first message below)
             put_json(os.path.join(W, "baseline.json"), {"id": max(ids or [0]), "t": time.time(), "chat": a.thread})
+        put_json(BINDING, {"codex_thread": a.thread, "partner_name": a.partner_name, "claude_name": a.claude_name})
         put_json(CONFIG, cfg); print("2. config written:", CONFIG)
         print("3. Claude hooks"); backup_settings(); add_hooks()
         if not a.no_services:
             print("4. background services"); start_services()
-        if cfg.get("handoff_thread") == a.thread:
+        if cfg.get("handoff_thread") == a.thread or (bind or {}).get("handoff_sent"):
             print("5. first message already sent to this chat earlier (not repeated)")
         else:
             body = (f"Hello {a.partner_name}, this is {a.claude_name}. We now share a mailbox so we can work as a team. "
@@ -297,15 +311,16 @@ def main():
             if r.returncode != 0 or not r.stdout.startswith("sent "):
                 raise SetupError("the first message could not be sent: " + (r.stdout + r.stderr).strip()[-300:])
             cfg["handoff_thread"] = a.thread; put_json(CONFIG, cfg)
+            put_json(BINDING, dict(get_json(BINDING, {}) or {}, handoff_sent=True))
             print("5. first message to the partner:", r.stdout.strip())
     except (SetupError, OSError, subprocess.SubprocessError) as e:
         print(f"\nSETUP FAILED: {e}\nPutting everything back as it was ...")
-        if not a.no_services:
+        if use_launchd:
             remove_services()
         for path, data in keep.items():
             restore_file(path, data)
         bad = []
-        if not a.no_services:
+        if use_launchd:
             for n, data in had_services.items():   # put back each service file, and its running/stopped state
                 p = os.path.join(AGENTS, f"com.claudecodexteam.{n}.plist")
                 if data is not None:

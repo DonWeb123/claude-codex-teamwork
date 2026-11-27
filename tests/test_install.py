@@ -114,6 +114,15 @@ try:
     rc, out = install(B)
     check("pairing a different chat refused, nothing changed", rc != 0 and "fresh copy" in out and cfg()["codex_thread"] == A
           and not any(B in c for c in calls()), out[-200:])
+    cb = open(CONFIG).read(); os.remove(CONFIG)
+    rc, out = install(B)
+    check("config.json lost: pairing a different chat still refused", rc != 0 and "fresh copy" in out and not any(B in c for c in calls()), out[-200:])
+    open(CONFIG, "w").write("{broken")
+    rc, out = install(B)
+    check("config.json damaged: pairing a different chat still refused", rc != 0 and not any(B in c for c in calls()), out[-200:])
+    open(CONFIG, "w").write(cb)
+    rc, out = run(os.path.join(ROOT, "install.py"), "--thread", A, "--partner-name", "renamed", "--skip-tests")
+    check("renaming the partner on the same chat refused", rc != 0 and "names are fixed" in out, out[-200:])
     rc, out = install(A)
     check("reinstall on the same chat: first message not repeated", rc == 0 and "not repeated" in out, out[-200:])
     open(os.path.join(DATA, "hooks", "OFF"), "w").close()
@@ -143,6 +152,15 @@ try:
     open(SETTINGS, "w").write("{broken")
     rc, out = run(os.path.join(ROOT, "uninstall.py"))
     check("uninstall: broken settings stop it before any change", rc != 0 and open(SETTINGS).read() == "{broken", out[-200:])
+    # Linux-style machine: no launchctl at all -> manual start instructions, no crash
+    open(SETTINGS, "w").write(good)
+    E2 = dict(ENV, TEAMKIT_DATA=os.path.join(T, "data-linux"), TEAMKIT_CONFIG=os.path.join(T, "config-linux.json"), TEAMKIT_NO_LAUNCHD="1")
+    E2.pop("TEAMKIT_LAUNCHCTL")
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "install.py"), "--thread", A, "--partner-name", "astra", "--skip-tests"],
+                       capture_output=True, text=True, env=E2, cwd=ROOT, timeout=60)
+    check("no launchctl (Linux): setup completes with manual start commands", r.returncode == 0 and "nohup" in r.stdout, (r.stdout + r.stderr)[-300:])
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "uninstall.py")], capture_output=True, text=True, env=E2, cwd=ROOT, timeout=60)
+    check("no launchctl (Linux): uninstall completes", r.returncode == 0, (r.stdout + r.stderr)[-300:])
 finally:
     for f in os.listdir(STATE):
         try:
