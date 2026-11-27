@@ -83,11 +83,12 @@ rc, out = team("release", "gpu", "--as", "claude")
 check("lease: releasing a free lease is a harmless no-op", rc == 0 and "was not held" in out, out)
 rc, out = team("claim", "gpu", "--as", "claude", "--what", "x", "--token", "../etc")
 check("lease: tokens are plain characters only", rc != 0 and "bad token" in out, out)
-for bad in ("{not json", "[]", "{}", '{"by": 7}'):
+for bad in ("{not json", "[]", "{}", '{"what": "no owner field"}', '{"by": 7}'):
     open(os.path.join(DATA, "locks", "gpu.json"), "w").write(bad)
-    rc, out = team("claim", "gpu", "--as", "claude", "--what", "x", "--if-free")
+    rc, out = team("claim", "gpu", "--as", "claude", "--what", "x", "--if-free", "--token", "auto")
     rc2, out2 = team("release", "gpu", "--as", "claude", "--force")
-    check(f"lease: a malformed lease file ({bad}) is never treated as free", rc != 0 and rc2 != 0 and "malformed" in out and "malformed" in out2, out + out2)
+    kept = open(os.path.join(DATA, "locks", "gpu.json")).read() == bad
+    check(f"lease: a malformed lease file ({bad}) is never treated as free and keeps its bytes", rc != 0 and rc2 != 0 and kept and "malformed" in out and "malformed" in out2, out + out2)
 os.remove(os.path.join(DATA, "locks", "gpu.json"))
 import threading  # noqa: E402
 res = []
