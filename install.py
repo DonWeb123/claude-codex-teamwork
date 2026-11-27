@@ -11,7 +11,7 @@ What it does (each step prints what it changed):
   4. starts the wake daemon + health monitor as login services (launchd), so they survive restarts
   5. sends the partner a first message with the team rules, which proves the link end to end
 Undo everything: python3 uninstall.py"""
-import argparse, json, os, plistlib, shlex, shutil, subprocess, sys, time
+import argparse, json, os, plistlib, re, shlex, shutil, subprocess, sys, time
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(ROOT, "team"))
@@ -20,6 +20,7 @@ from common import DATA, CONFIG, find_codex, codex_home, get_json, put_json, tea
 SETTINGS = os.path.expanduser("~/.claude/settings.json")
 AGENTS = os.path.expanduser("~/Library/LaunchAgents")
 SERVICES = {"wakerd": "team/wakerd.py", "commhealth": "team/commhealth.py"}
+T_LAUNCH = 0.0
 
 
 def threads():
@@ -59,10 +60,34 @@ def load_settings():
 
 
 def backup_settings():
-    if os.path.exists(SETTINGS):
-        b = os.path.join(DATA, f"settings.backup.{time.strftime('%Y%m%d-%H%M%S')}.json")
-        shutil.copyfile(SETTINGS, b); os.chmod(b, 0o600)   # settings can hold secrets: owner-only
-        print("  backup of your Claude settings:", b)
+    """unique, owner-only (0600) backup created BEFORE any byte is copied into it"""
+    if not os.path.exists(SETTINGS):
+        return None
+    with open(SETTINGS, "rb") as f:
+        data = f.read()
+    b = os.path.join(DATA, f"settings.backup.{time.strftime('%Y%m%d-%H%M%S')}.{os.getpid()}.{os.urandom(3).hex()}.json")
+    fd = os.open(b, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+    print("  backup of your Claude settings:", b)
+    return b
+
+
+NAME_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}")
+THREAD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._:-]{0,127}")
+
+
+def plist_owned(label, script):
+    """True if no plist exists or it is OURS (same label + same program in this folder); False = someone else's file"""
+    p = os.path.join(AGENTS, label + ".plist")
+    if not os.path.exists(p):
+        return True
+    try:
+        with open(p, "rb") as f:
+            d = plistlib.load(f)
+        return d.get("Label") == label and (d.get("ProgramArguments") or [None, None])[1:2] == [os.path.join(ROOT, script)]
+    except Exception:
+        return False
 
 
 def add_hooks():
@@ -93,16 +118,21 @@ def plist(name, script):
 
 
 def start_services():
+    global T_LAUNCH
+    T_LAUNCH = time.time()
     if sys.platform != "darwin":
         print("  not macOS: start these yourself and keep them running:")
         for n, s in SERVICES.items():
             print(f"    nohup python3 {os.path.join(ROOT, s)} run >/dev/null 2>&1 &")
         return
     os.makedirs(AGENTS, exist_ok=True)
-    ok = True
+    ok = True; pids = {}
     for n, s in SERVICES.items():
         label, data = plist(n, s); p = os.path.join(AGENTS, label + ".plist")
-        subprocess.run(["launchctl", "unload", p], capture_output=True)
+        if not plist_owned(label, s):
+            ok = False; print(f"  service {label}: {p} belongs to another copy or program: left untouched"); continue
+        if os.path.exists(p):
+            subprocess.run(["launchctl", "unload", p], capture_output=True)
         with open(p, "wb") as f:
             f.write(data)
         r = subprocess.run(["launchctl", "load", p], capture_output=True, text=True)
@@ -118,16 +148,17 @@ def start_services():
             time.sleep(0.5)
         args = subprocess.run(["ps", "-p", pid, "-o", "args="], capture_output=True, text=True).stdout if pid else ""
         if pid and os.path.join(ROOT, s) in args:
-            print(f"  service {label}: running (pid {pid})")
+            pids[n] = int(pid); print(f"  service {label}: running (pid {pid})")
         else:
             ok = False; print(f"  service {label}: NOT running: see {os.path.join(DATA, 'logs', n + '.log')}")
-    hb = os.path.join(DATA, "wake", "heartbeat.json")
-    for _ in range(30):
-        if (get_json(hb) or {}).get("t", 0) > time.time() - 30:
-            print("  wake daemon heartbeat: OK"); break
+    hb_p = os.path.join(DATA, "wake", "heartbeat.json")
+    for _ in range(30):   # the heartbeat must come from the daemon we just launched, after its launch
+        hb = get_json(hb_p) or {}
+        if "wakerd" in pids and hb.get("pid") == pids["wakerd"] and hb.get("t", 0) >= T_LAUNCH:
+            print("  wake daemon heartbeat: OK (from the launched pid)"); break
         time.sleep(0.5)
     else:
-        ok = False; print("  wake daemon heartbeat: MISSING after 15 s")
+        ok = False; print("  wake daemon heartbeat: no fresh heartbeat from the launched daemon after 15 s")
     if not ok:
         sys.exit("A background service did not start: show this output to Claude. (Hooks are installed; python3 uninstall.py undoes everything.)")
 
@@ -155,20 +186,32 @@ def main():
         return
     if not codex:
         sys.exit("The Codex command-line tool was not found. Install the Codex extension in VS Code (or the Codex app), open it once, then rerun.")
-    if a.partner_name.lower() in (a.claude_name.lower(), "owner"):
+    # validate EVERYTHING before writing anything (a failed setup must not change where mail goes)
+    a.partner_name, a.claude_name = a.partner_name.lower(), a.claude_name.lower()
+    for v in (a.partner_name, a.claude_name):
+        if not NAME_RE.fullmatch(v):
+            sys.exit(f"bad name {v!r}: lowercase letters, digits, _ or -, starting with a letter")
+    if a.partner_name in (a.claude_name, "owner") or a.claude_name == "owner":
         sys.exit("pick a different --partner-name")
+    if not THREAD_RE.fullmatch(a.thread):
+        sys.exit(f"bad --thread {a.thread!r}: use the id shown by --list-threads")
+    load_settings()   # exits with nothing changed if the settings file is broken
+    if not a.no_services and sys.platform == "darwin":
+        for n, sc in SERVICES.items():
+            if not plist_owned(f"com.claudecodexteam.{n}", sc):
+                sys.exit(f"~/Library/LaunchAgents/com.claudecodexteam.{n}.plist belongs to another copy of this kit: run that copy's uninstall.py first. Nothing was changed.")
     work = [os.path.realpath(os.path.expanduser(d)) for d in (a.work_dir or [ROOT])]
     if ROOT not in work:
         work.append(ROOT)
-    old = get_json(CONFIG, {}) or {}
-    cfg = {"claude_name": a.claude_name.lower(), "partner_name": a.partner_name.lower(), "codex_thread": a.thread,
-           "work_dirs": work, "installed_at": old.get("installed_at") or time.time()}
-    put_json(CONFIG, cfg); print("1. config written:", CONFIG)
     if not a.skip_tests:
-        print("2. self-tests ...")
+        print("1. self-tests ...")
         r = subprocess.run([sys.executable, os.path.join(ROOT, "tests", "run_tests.py")])
         if r.returncode != 0:
-            sys.exit("Self-tests failed: nothing else was installed. Show this output to Claude.")
+            sys.exit("Self-tests failed: nothing was installed or changed. Show this output to Claude.")
+    old = get_json(CONFIG, {}) or {}
+    cfg = {"claude_name": a.claude_name, "partner_name": a.partner_name, "codex_thread": a.thread,
+           "work_dirs": work, "installed_at": old.get("installed_at") or time.time(), "handoff_thread": old.get("handoff_thread")}
+    put_json(CONFIG, cfg); print("2. config written:", CONFIG)
     import glob as _g
     bp = os.path.join(DATA, "wake", "baseline.json")
     if not os.path.exists(bp):   # wake for everything sent from now on (incl. the first message below), never for older history
@@ -177,9 +220,8 @@ def main():
     print("3. Claude hooks"); add_hooks()
     if not a.no_services:
         print("4. background services"); start_services()
-    from common import msgs as _msgs
-    if any(m.get("type") == "HANDOFF" and m.get("subject", "").startswith("Team link is live") and m.get("to") == cfg["partner_name"] for m in _msgs()):
-        print("5. first message already sent earlier (not repeated)"); return
+    if cfg.get("handoff_thread") == a.thread and old.get("partner_name") == cfg["partner_name"]:
+        print("5. first message already sent to this chat earlier (not repeated)"); return
     rules = os.path.join(ROOT, "AGENTS.md")
     body = (f"Hello {cfg['partner_name']}, this is {cfg['claude_name']}. We now share a mailbox so we can work as a team. "
             f"Rules: {rules} (please read it once). Every message reaches you as a wake in this chat. Reply with: "
@@ -188,7 +230,10 @@ def main():
     r = subprocess.run([sys.executable, os.path.join(ROOT, "team", "team.py"), "send", "--as", cfg["claude_name"], "--to", cfg["partner_name"],
                         "--type", "HANDOFF", "--re", "none", "--subject", "Team link is live: please read the rules and answer", "--body", body],
                        capture_output=True, text=True)
-    print("5. first message to the partner:", (r.stdout or r.stderr).strip())
+    if r.returncode != 0 or not r.stdout.startswith("sent "):
+        sys.exit("5. the first message could NOT be sent: " + (r.stdout + r.stderr).strip())
+    cfg["handoff_thread"] = a.thread; put_json(CONFIG, cfg)   # a new target chat later gets its own fresh handoff
+    print("5. first message to the partner:", r.stdout.strip())
     print(f"\nDone. Restart Claude Code in {ROOT} so the hooks load, then check the link with:\n"
           f"  python3 {os.path.join(ROOT, 'team', 'commhealth.py')} once")
 
