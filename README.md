@@ -155,7 +155,7 @@ lands only when that turn ends, unless the partner checks its inbox between step
     yet been checked against a live Claude Code. The setup's last step, `team/verify_link.py`, checks it on each new install:
     a fresh challenge with a one-time code must reach the partner's chat, be answered from that chat, and reach Claude
     through a hook (with its Claude session), all proven from logs and receipts, never from reading the inbox by hand.
-    Astra reviewed the kit's privacy and safety over 12 rounds before giving it a GO.
+    Astra reviewed the kit's privacy and safety over more than ten rounds before giving it a GO.
 
 ### 3.3 Token efficiency
 
