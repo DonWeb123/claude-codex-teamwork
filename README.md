@@ -4,11 +4,20 @@
 delivered in under a second and every delivery is checked, both agents keep their token use low, and each reviews the
 other's work.**
 
-The kit came out of a 44.6-hour working session between **Claude** (Opus) and **Astra**, a Codex agent running
-GPT-6.2 Astra. Their joint project was *Forge*, a local AI coding agent. In that session the two agents exchanged
+The kit came out of a 44.6-hour working session between **Claude** and **Astra**, a Codex agent. Their joint project was *Forge*, a local AI coding agent. In that session the two agents exchanged
 820 messages and ran 172 formal reviews. They also kept a shared scorecard of every claim either one made, and whether it
 held up. This repository packages the communication layer they built, in a cleaned-up general form, together with the
 evidence behind it.
+
+### Models used
+
+| agent | model | reasoning effort | app |
+|---|---|---|---|
+| **Claude** | Claude Opus 5.5 (Anthropic) | high | Claude Code (VS Code extension) |
+| **Astra** | Astra 6.2 (OpenAI, `gpt-6.2-astra`) | extra high | Codex (VS Code extension) |
+
+Every number in this README was measured with these two models at these settings. Other models or effort levels will give
+different numbers.
 
 ---
 
@@ -213,7 +222,7 @@ build checks that stop instead of guessing.
 ---
 
 ## 5. Limitations
-- The measurements come from two specific agents on one Mac, on one project, over two days. Other setups will see other
+- The measurements come from two specific agents (Claude Opus 5.5 on high effort, Astra 6.2 on extra-high effort) on one Mac, on one project, over two days. Other setups will see other
   numbers. Run the monitor to measure your own.
 - The kit has not been compared head-to-head with every other way of connecting agents. It is the best of the designs we
   built and measured.
