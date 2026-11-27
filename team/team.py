@@ -6,13 +6,17 @@
   open --as ME              messages that asked me for a reply I have not sent yet
   read ID                   show one message
   ack ID --as ME [--note T] mark as read and understood (silence is not agreement)
-  claim NAME --as ME --what TEXT | release NAME --as ME | claims     who is editing what
+  claim NAME --as ME --what TEXT [--if-free] [--token T|auto]          who is editing what / who owns a shared resource
+  release NAME --as ME [--token T] [--force]   |   claims
+      --if-free: fail unless NOBODY holds it (a plain claim also succeeds when YOU already hold it, e.g. from an
+      earlier run of yours - so it is not a "free" test). --token: the lease remembers it and release needs it,
+      so one script run can never release a lease taken by another run of the same agent.
   wait --as ME [--secs N]   return when a message for me is unread
 
 Types that ask for a reply: ASK PROPOSE REVIEW BLOCK HANDOFF.  Others: ANSWER AGREE OBJECT RESULT FYI CLAIM.
 Rules built in: max 220 words (put detail in files and point to them with --refs); a '?' needs a reply-wanted type;
 if the other agent is waiting on you, say which message you answer (--re ID) or that this is a new topic (--re none)."""
-import argparse, hashlib, os, re, shutil, sys, time
+import argparse, hashlib, os, re, shutil, sys, time, uuid
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import DATA, cfg, get_json, put_json, msgs, acked
 import compat
@@ -67,7 +71,8 @@ def main():
     p = sp.add_parser("read"); p.add_argument("id")
     p = sp.add_parser("ack"); p.add_argument("id"); me(p); p.add_argument("--note", default="")
     p = sp.add_parser("claim"); p.add_argument("name"); me(p); p.add_argument("--what", required=True)
-    p = sp.add_parser("release"); p.add_argument("name"); me(p)
+    p.add_argument("--if-free", action="store_true"); p.add_argument("--token")
+    p = sp.add_parser("release"); p.add_argument("name"); me(p); p.add_argument("--token"); p.add_argument("--force", action="store_true")
     sp.add_parser("claims")
     a = ap.parse_args()
     # paths are built from these values: only plain ids/names, never '../' or '/'
@@ -140,19 +145,39 @@ def main():
             f.write(time.strftime("%m-%d %H:%M ") + a.note)
         print("acked", a.id)
     elif a.cmd in ("claim", "release"):
+        # Lesson: a plain claim succeeds when you already hold the lease, so two runs of the same agent both "owned"
+        # the model server and the first one to finish released it under the second. Tokens bind a lease to ONE run.
+        if a.token is not None and not re.fullmatch(r"[A-Za-z0-9._:-]{1,80}", a.token):
+            sys.exit("bad token: letters, digits, . _ : - only (or 'auto' on claim)")
         with lock():
             path = os.path.join(DATA, "locks", f"{a.name}.json")
-            cur = get_json(path)
-            if cur and cur.get("by") not in (a.me, None):
-                sys.exit(f"held by {cur['by']}: {cur.get('what')}")
-            put_json(path, {"by": a.me if a.cmd == "claim" else None, "what": getattr(a, "what", ""), "ts": time.strftime("%m-%d %H:%M")})
-        print(("claimed" if a.cmd == "claim" else "released"), a.name)
+            cur = get_json(path) or {}
+            held = cur.get("by")
+            if held not in (a.me, None):
+                sys.exit(f"held by {held}: {cur.get('what')}")
+            if a.cmd == "claim":
+                if a.if_free and held is not None:
+                    sys.exit(f"not free: you already hold it ({cur.get('what')}, {cur.get('ts')}) - another run of yours?")
+                tok = uuid.uuid4().hex[:12] if a.token == "auto" else a.token
+                if held == a.me and cur.get("token") and cur.get("token") != tok:
+                    sys.exit(f"held by you under another token ({cur.get('what')}): that run must release it first")
+                put_json(path, {"by": a.me, "what": a.what, "ts": time.strftime("%m-%d %H:%M"), **({"token": tok} if tok else {})})
+                print("claimed", a.name + (f" token={tok}" if tok else ""))
+            else:
+                if held is None:
+                    print("released", a.name, "(was not held)"); return
+                if cur.get("token") and not a.force and a.token != cur["token"]:
+                    sys.exit(f"{a.name} was claimed with a token: pass the same --token (or --force if that run is really gone)")
+                if a.token and cur.get("token") != a.token:
+                    sys.exit(f"{a.name}: token does not match the holder's run")
+                put_json(path, {"by": None, "what": "", "ts": time.strftime("%m-%d %H:%M")})
+                print("released", a.name)
     elif a.cmd == "claims":
         for n in sorted(os.listdir(os.path.join(DATA, "locks"))):
             if n.endswith(".json"):
                 c = get_json(os.path.join(DATA, "locks", n)) or {}
                 if c.get("by"):
-                    print(n[:-5], "held by", c["by"], "-", c.get("what"), c.get("ts"))
+                    print(n[:-5], "held by", c["by"], "-", c.get("what"), c.get("ts"), "(token-bound)" if c.get("token") else "")
     elif a.cmd == "wait":
         t = time.time()
         while True:

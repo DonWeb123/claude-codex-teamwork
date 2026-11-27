@@ -82,7 +82,7 @@ Measured results:
 
 | component | role |
 |---|---|
-| `team/team.py` | The mailbox. Each message is one file and is never edited after sending. Writes are atomic and locked. The tool enforces three rules: a question must use a type that asks for a reply, an answer must name the message it answers (`--re`), and messages stop at 220 words. |
+| `team/team.py` | The mailbox. Each message is one file and is never edited after sending. Writes are atomic and locked. The tool enforces three rules: a question must use a type that asks for a reply, an answer must name the message it answers (`--re`), and messages stop at 220 words. Leases (`claim`/`release`) can be bound to one script run with `--if-free --token`. |
 | `team/wakerd.py` | The wake service. It sends one wake per batch of unread mail, carrying a unique marker. Delivery counts as confirmed only when that marker appears in the receiver's own session log. It raises an alert when a turn doesn't start, when Codex restarts, or when a reply is overdue. |
 | `team/hooks/idle_wake.py` | A Claude Code `Stop`/`SessionStart` hook (`asyncRewake`) that wakes an idle Claude when mail arrives. |
 | `team/hooks/midturn.py` | A Claude Code `PostToolUse` hook that shows new mail to a busy Claude after each tool call. It moves its checkpoint only after the notice has been printed. |
@@ -95,6 +95,9 @@ Measured results:
    **23 wakes** the system recorded nothing without raising any alarm. Confirming each delivery by its marker
    closes that gap.
 3. **Measure real traffic.** The monitor sends no test messages and makes no model calls.
+4. **A lease names the run, not only the agent.** A plain `claim` also succeeds for the agent that already holds it. Two
+   runs by the same agent could both believe they owned the model server, and the first to finish would release it
+   under the second. `claim --if-free --token auto` and `release --token` bind a lease to one run.
 
 ---
 
@@ -148,7 +151,7 @@ lands only when that turn ends, unless the partner checks its inbox between step
   - v3 suite: 5/5, including one test on Astra's **real** session log. 16 legacy checks gave identical results on v2 and v3.
   - Mid-turn hook: 7/7 pipe tests, then 12/12 controls after three review rounds by Astra.
   - Idle hook and monitor revision: 17/17.
-  - This kit: **37/37** core tests (`tests/run_tests.py`) and **37/37** install/uninstall tests (`tests/test_install.py`,
+  - This kit: **48/48** core tests (`tests/run_tests.py`, including 11 lease tests) and **37/37** install/uninstall tests (`tests/test_install.py`,
     fake home folder). GitHub Actions runs both on **Windows, Ubuntu and macOS** with Python 3.10 and 3.13 on every push.
   - Live check with a real Claude Code (v2.1.332, macOS): the exec-form mid-turn hook showed Claude new mail during a tool
     call, and the idle hook woke Claude for it after its turn ended. On Windows the same hooks are covered by CI but have not
@@ -218,7 +221,14 @@ working alone. These findings are the observed record of the two working togethe
 8. **A launch script that hid failures.** It masked a failed run and recorded an out-of-date code fingerprint. Both were
    fixed before the launch was reported.
 9. **Correlation reported as cause.** Claude wrote that a layout bug "explains" four failures. The logs supported only one.
-10. **In this very link:**
+10. **Checkers that passed broken inputs.** Claude rebuilt two experiment-fidelity checkers. Astra built two broken copies
+    of a real run, and both were reported clean. One checker silently dropped a pair of linked calls when one call's
+    limit was changed. The other accepted a stop event whose stopped request was missing. Both now fail with the exact
+    reason, and both copies are permanent test cases.
+11. **A launch script with three quiet failure paths.** A canary that could exit 0 on a miss, an identity check pinned to
+    the previous server command, and a cleanup that released the shared lease even if another run held it. Astra
+    required a run-specific identity reference, a check of the canary's own result, and a lease bound to the run.
+12. **In this very link:**
     - Astra found a race: mail written *during* a wake-service tick waited for the 10 s backstop instead of being seen at once.
     - An alert-read failure could swallow ordinary mail.
     - A first install of this kit could redirect mail after a setup that failed partway.
@@ -234,7 +244,12 @@ working alone. These findings are the observed record of the two working togethe
 5. **A confound in an experiment design.** Astra repeated the same random seed across blocks that had different visible
    clocks and workspace paths, so any difference could come from either. Astra accepted this and added controls.
 
-### 4.3 A mistake we both missed
+### 4.3 A mistake Claude made and reported itself
+Claude re-ran a summary to test a new checker. The re-run overwrote the original reports, which the review was
+supposed to keep. The checkers were deterministic and backed up, so Claude rebuilt the reports and showed they matched
+the original fingerprint byte for byte, then told Astra. Re-runs now write to a separate folder (rule in `AGENTS.md`).
+
+### 4.4 A mistake we both missed
 Both of us reviewed one archive check and missed that it compared a 16-character fingerprint with a full one. The check
 was designed to stop when in doubt, and it refused the real data before anything was graded. That is why both agents
 build checks that stop instead of guessing.

@@ -19,6 +19,12 @@ Both agents follow these rules. They came from two days of real joint work. Each
 - **Keep a scorecard** of claims, who made them, whether they were right or wrong, and what settled it. Log both agents' mistakes.
 - Disagreement: write down the experiment that decides BEFORE running it, then run it.
 - `claim <file>` before editing something shared, `release` after. One person runs a shared resource at a time.
+- A script that holds a shared resource (a model server, a GPU) takes it with `claim NAME --if-free --token auto` and
+  releases it with that same `--token`. A plain claim also succeeds when you already hold it, so it is not a "free" check,
+  and without a token one run of yours can release a lease that another run of yours still uses.
+- A decision that changes the other agent's next step (GO, STOP, OBJECT, AGREE with instructions) asks for a reply, so
+  it is never missed or left unconfirmed. The receiver confirms with a short `--re` answer.
+- Keep original results. A re-run writes to a new folder, never over the report it is checking.
 - Work in copies. Never edit something while a run is using it.
 - Save tokens. Ask for the COMPLETE list of remaining issues once and batch fixes into 1-2 rounds. Keep reviews short
   (GO/HOLD + blockers). Do not loop on edge cases that do not change a real outcome.
