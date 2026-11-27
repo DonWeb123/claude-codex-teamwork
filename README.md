@@ -1,12 +1,11 @@
 # Claude + Codex Teamwork Kit
 
-**A tested link that lets Claude Code (Anthropic) and a Codex agent (OpenAI) work as one research team. Messages are
-delivered in under a second and every delivery is checked, both agents keep their token use low, and each reviews the
-other's work.**
+**A tested link that lets Claude Code (Anthropic) and a Codex agent (OpenAI) work as one research team. A new message triggers a wake within 0.2 s, delivery is confirmed from the receiver's own
+session log, the rules keep messages short, and each agent reviews the other's work.**
 
 The kit came out of a 44.6-hour working session between **Claude** and **Astra**, a Codex agent. Their joint project was *Forge*, a local AI coding agent. In that session the two agents exchanged
-820 messages and ran 172 formal reviews. They also kept a shared scorecard of every claim either one made, and whether it
-held up. This repository packages the communication layer they built, in a cleaned-up general form, together with the
+820 messages, including 172 review requests. They also kept a shared scorecard of claims either one made, and whether
+each held up. This repository packages the communication layer they built, in a cleaned-up general form, together with the
 evidence behind it.
 
 ### Models used
@@ -51,8 +50,11 @@ The final design combines four parts:
 - a passive monitor that measures latency from real traffic.
 
 Measured results:
-- **Wake time:** about 7 s before the redesign, **0.195 s** after (from the moment a message is written to the moment the wake is sent).
-- **Delivery:** over the ~22 hours after the redesign, the monitor recorded **316 of 316** messages as seen by the receiver, with **0 lost**.
+- **Wake time:** about 7 s before the redesign, **0.195 s** after. This runs from the moment a message is written to the
+  moment the wake is sent. In the same live probe a busy Astra acknowledged the message from its inbox at **12.96 s**; the
+  wake itself reached Astra's chat when its current turn ended, at 84.5 s.
+- **Seen by the receiver:** over the ~22 hours after the redesign, all **316** messages eligible for an immediate wake had
+  evidence that the receiver saw them. None was missing.
 - **Latency:** the median time until the receiver saw a message was **8–10 s** in each direction.
 - **Message size:** messages averaged 137 words against a 220-word limit, and **81 %** pointed to evidence files instead of pasting it.
 - **Review value:** in a logged 8-gate block where each agent reviewed the other's work, the reviewer found defects in
@@ -90,7 +92,7 @@ Measured results:
 2. **Delivery has to be confirmed, not assumed.** In version 2, a Codex update changed the log format, and for
    **23 wakes** the system recorded nothing without raising any alarm. Confirming each delivery by its marker
    closes that gap.
-3. **Measure real traffic.** The monitor sends no test messages and spends no tokens.
+3. **Measure real traffic.** The monitor sends no test messages and makes no model calls.
 
 ---
 
@@ -116,19 +118,23 @@ Claude each owned one direction of the link and reviewed the other's.
 |---|---|---|
 | message written → wake sent | ~7 s | **0.195 s** |
 | live test: idle Astra woken by a RESULT message | never woke (RESULT/FYI didn't trigger a wake) | **2.975 s** (marker matched to the turn) |
-| Astra acknowledges a message while busy | at the end of its turn | **12.96 s** |
+| busy Astra acknowledges a message from its inbox | at the end of its turn | **12.96 s** |
+| same probe: wake lands in busy Astra's chat | at turn end | 84.5 s (at the end of that turn) |
 | Claude→Astra, until delivery confirmed | median 6.6 s, worst 312 s (n=41) | median **8.3 s**, p90 98.7 s (n=143) |
-| Astra→Claude, until Claude saw it | median 207 s, p90 485 s, worst 793 s (n=40) | median **9.6 s**, p90 **47.6 s** (n=173) |
+| Astra→Claude: until Claude acknowledged (before) / until first evidence Claude saw it (after) | median 207 s, p90 485 s, worst 793 s (n=40) | median **9.6 s**, p90 **47.6 s** (n=173) |
 
 The "after" rows cover ~22 hours of real work on the original Forge setup. They count only messages due an immediate
-wake; a later change held back some informational notes on purpose, and those are left out.
+wake; a later change held back some informational notes on purpose, and those are left out. The Astra→Claude
+"before" figure was measured to Claude's acknowledgement; the "after" figure is measured to the first sign that Claude
+saw the message (a hook notice, a wake or an acknowledgement), so the two endpoints are not identical.
 
 The Claude→Astra p90 is still above our 60 s target. A message that reaches a Codex chat in the middle of a long turn
 lands only when that turn ends, unless the partner checks its inbox between steps. That is why `AGENTS.md` asks it to.
 
 ### 3.2 Reliability
 
-- **316 of 316** messages were recorded as seen by the receiver (143 Claude→Astra, 173 Astra→Claude), with **0 lost**.
+- All **316** messages eligible for an immediate wake (143 Claude→Astra, 173 Astra→Claude) had evidence that the
+  receiver saw them. None was missing. This is an observed record over 22 hours, not a guarantee.
 - The monitor opens an incident when mail goes unseen for more than 10 minutes, when the wake service's heartbeat is
   stale or missing, or when no Codex app is running.
 - Test suites run on the live system:
@@ -136,18 +142,20 @@ lands only when that turn ends, unless the partner checks its inbox between step
   - v3 suite: 5/5, including one test on Astra's **real** session log. 16 legacy checks gave identical results on v2 and v3.
   - Mid-turn hook: 7/7 pipe tests, then 12/12 controls after three review rounds by Astra.
   - Idle hook and monitor revision: 17/17.
-  - This kit: **29/29** (`python3 tests/run_tests.py`). It also went through three security reviews by Astra before release.
+  - This kit: **29/29** core tests (`python3 tests/run_tests.py`) and **16/16** install/uninstall tests
+    (`python3 tests/test_install.py`, fake home folder). Astra reviewed the kit's privacy and safety over several rounds before release.
 
 ### 3.3 Token efficiency
 
-Usage limits are a real constraint for both agents. We cut token use in four ways.
+Usage limits are a real constraint for both agents, so we used four techniques to keep token use down. We did not
+measure token totals, so the saving itself is not quantified. The table shows what we did measure.
 
 | technique | measurement |
 |---|---|
-| **220-word message limit**, enforced by the tool | Across 820 messages, the median was 141 words, the mean 137 and the p90 202. No message went over the limit. |
-| **Point to evidence instead of pasting it** (`--refs file:line`) | **81 %** of messages (665 of 820) pointed to files. Logs and code stayed out of both chats. |
+| **220-word message limit**, enforced by the tool | Across 820 messages, the median was 141 words, the mean 137 and the p90 201. No message went over the limit. |
+| **Point to evidence instead of pasting it** (`--refs file:line`) | **81 %** of messages (665 of 820) pointed to evidence files. |
 | **One complete checklist, short verdicts.** After an early review loop ran about 16 rounds that each fixed a single gap, we changed the rule. The reviewer now sends its **complete** list once and answers GO/HOLD in 80 words or fewer. | The median length of Astra's messages fell from **141 to 81 words** (its share of the first 300 messages vs the last 150). |
-| **No wasted traffic.** Several messages share one combined wake. The monitor is passive. There are no thank-you notes or status pings. | Measuring the link adds no messages and costs no tokens. |
+| **Less traffic.** Several messages share one combined wake. The monitor is passive. The rules forbid thank-you notes and status pings. | The monitor sends no messages and makes no model calls. |
 
 ---
 
@@ -159,7 +167,7 @@ needed the other agent's review before anyone acted on it.
 Over the 44.6 hours:
 - **172** formal REVIEW requests.
 - **23** objections.
-- **43** agreements given after the agent had checked the evidence itself.
+- **43** agreements.
 
 A shared scorecard recorded each claim, who made it, whether it held, and what settled it. Claude did most of the
 hands-on building, so most of the logged mistakes are Claude's.
@@ -171,7 +179,7 @@ hands-on building, so most of the logged mistakes are Claude's.
 | gates where the reviewer found defects that needed rework | **6 of the 7** gates that went to cross-review. The eighth was stopped by the author's own fail-closed check. |
 | defects found | **16**, of which **5 were high severity** |
 | time to complete a review | 4–9 minutes |
-| time to fix a defect | 4–15 minutes |
+| rework time per gate | 4–15 minutes |
 
 **The pattern was the same in every gate:**
 - **Astra** found gaps in how Claude's graders handled evidence: results not tied to the right run, missing provenance,

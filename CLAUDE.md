@@ -31,3 +31,4 @@ explain in plain words, and ask only what you cannot find out yourself.
   if you have screen control.
 - Turn the hooks off: `touch team-data/hooks/OFF` (both) or `team-data/hooks/MIDTURN_OFF` (mid-turn only).
 - Remove everything: `python3 uninstall.py`.
+- Tests: `python3 tests/run_tests.py` (core) and `python3 tests/test_install.py` (install/uninstall, fake home folder).
