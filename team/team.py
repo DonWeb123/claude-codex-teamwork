@@ -12,7 +12,7 @@
 Types that ask for a reply: ASK PROPOSE REVIEW BLOCK HANDOFF.  Others: ANSWER AGREE OBJECT RESULT FYI CLAIM.
 Rules built in: max 220 words (put detail in files and point to them with --refs); a '?' needs a reply-wanted type;
 if the other agent is waiting on you, say which message you answer (--re ID) or that this is a new topic (--re none)."""
-import argparse, fcntl, hashlib, os, shutil, sys, time
+import argparse, fcntl, hashlib, os, re, shutil, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import DATA, cfg, get_json, put_json, msgs, acked
 
@@ -71,6 +71,13 @@ def main():
     p = sp.add_parser("release"); p.add_argument("name"); me(p)
     sp.add_parser("claims")
     a = ap.parse_args()
+    # paths are built from these values: only plain ids/names, never '../' or '/'
+    for k in ("id", "re"):
+        v = getattr(a, k, None)
+        if v and not (k == "re" and v == "none") and not re.fullmatch(r"M\d{4,6}", v):
+            sys.exit(f"bad message id {v!r} (expected like M0042)")
+    if getattr(a, "name", None) and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", a.name):
+        sys.exit(f"bad claim name {a.name!r}: letters, digits, . _ - only")
 
     if a.cmd == "send":
         body = a.body or ""

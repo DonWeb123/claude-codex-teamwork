@@ -15,7 +15,8 @@ if sys.platform == "darwin":
             subprocess.run(["launchctl", "unload", p], capture_output=True); os.remove(p); print("stopped", n)
 s = get_json(SETTINGS)
 if isinstance(s, dict) and s.get("hooks"):
-    shutil.copyfile(SETTINGS, os.path.join(DATA, f"settings.backup.{time.strftime('%Y%m%d-%H%M%S')}.json"))
+    b = os.path.join(DATA, f"settings.backup.{time.strftime('%Y%m%d-%H%M%S')}.json")
+    shutil.copyfile(SETTINGS, b); os.chmod(b, 0o600)
     mine = os.path.join(ROOT, "team", "hooks")
     for ev in list(s["hooks"]):
         groups = []

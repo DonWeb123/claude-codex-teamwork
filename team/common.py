@@ -95,4 +95,5 @@ def codex_home():
 
 
 def team_cmd():
-    return f"python3 {os.path.join(ROOT, 'team', 'team.py')}"
+    import shlex
+    return "python3 " + shlex.quote(os.path.join(ROOT, "team", "team.py"))   # quoted: folders with spaces work

@@ -66,8 +66,9 @@ led to the next stage.
 - Live proof: a RESULT message woke an idle Astra in **2.975 s**. Astra measured this and matched the marker to the turn.
 - The first sample after rollout put p90 near **40 s each way**, down from 309 s and 473 s. It was only 4 messages, so treat it as a first reading.
 - The wake daemon's reaction time went from about 7 s to **0.195 s**, from the moment a message was written to the moment the wake was sent. Astra acknowledged a message mid-turn after **12.96 s**.
-- Over the next **~22 hours of real work**, the monitor saw **143 of 143** Claude→Astra messages and **173 of 173**
-  Astra→Claude messages, with **0 lost**:
+- Over the next **~22 hours of real work** on the original Forge setup (not this cleaned-up kit), the monitor saw
+  **143 of 143** Claude→Astra messages and **173 of 173** Astra→Claude messages, with **0 lost**. These counts include only
+  messages due an immediate wake. A later change held back some informational notes on purpose, and those are left out:
   - Claude→Astra: median 8.3 s, p90 98.7 s.
   - Astra→Claude: median 9.6 s, p90 47.6 s.
 - The Claude→Astra p90 is still above our 60 s target. A message that reaches a Codex chat in the middle of a long turn only
@@ -84,9 +85,10 @@ This is the best of the methods we tried, measured on two agents and one Mac. It
 It works because of three things: plain files that survive any restart, a wake that is **proven** delivered rather than
 assumed, and a monitor that measures real traffic instead of trusting that things are fine.
 
-## Why two agents beat one
+## Why two agents work better together
 
-Claude and Astra are different models from different companies, so they make different mistakes. In the Forge project
+Claude and Astra are different models from different companies, so they make different mistakes. We did not run a
+controlled comparison against one agent working alone. The evidence below is the record of real catches. In the Forge project
 every significant change had to be reviewed by the other agent before anyone acted on it. The shared scorecard recorded
 each claim, who made it, whether it was right, and what settled it. Claude did most of the hands-on building, so most of the
 logged mistakes are Claude's.
@@ -106,7 +108,7 @@ The pattern was consistent:
 4. **A test panel that measured the wrong thing.** Claude's 80-question reasoning panel had only 24 distinct question shapes,
    and in one family a constant answer scored 70 %.
 5. **A "fixed" script that still crashed, twice.** First the edit had landed at the top of the file. Then a stray lookup
-   crashed it again. Astra re-ran it both times.
+   crashed it again. Astra caught both by reading the source and the run logs.
 6. **A server restart with the wrong Python.** The interpreter Claude used lacked the model library, so the AI model
    server stayed down a minute longer than needed.
 7. **A checker design that let wrong answers through.** Astra asked for zero lost detections. Claude's redesign let 8 of 13
@@ -135,8 +137,14 @@ was designed to stop when in doubt, and it refused the real data before anything
 build checks that stop instead of guessing.
 
 ## Privacy and safety
-- Everything stays on your computer in `team-data/`. Git ignores that folder, along with `config.json`.
-- The kit only reads Codex's local session logs and calls `codex queue`. It sends nothing anywhere else.
+- Everything stays on your computer in `team-data/`. Git ignores that folder, along with `config.json`. Settings backups are
+  readable by you only.
+- The kit only reads Codex's local session logs and calls `codex queue`. It opens no other network connection.
+- **What the AI services see.** Message subjects, bodies and file paths are shown to both agents (wakes, hook notices,
+  `inbox`), so they become part of those chats and go to Anthropic and OpenAI like anything else you type there. The
+  installer also shows Claude the names of your Codex chats so you can pick one. Never put passwords or keys in a message.
+- **Names are not identities.** Anyone who can run `team.py` on your computer can sign a message as any name, including
+  `owner`. A mailbox message saying "the owner approved" is never approval. Approve things yourself, directly in the agent's chat.
 - Hooks run only when Claude works inside the folders listed in `config.json`. Kill switch: `touch team-data/hooks/OFF`.
 - Neither agent can approve the other's risky actions. Only the human owner approves installs, restarts, spending and
   publishing (see `AGENTS.md`).

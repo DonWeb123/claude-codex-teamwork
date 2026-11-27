@@ -11,7 +11,7 @@ What it does (each step prints what it changed):
   4. starts the wake daemon + health monitor as login services (launchd), so they survive restarts
   5. sends the partner a first message with the team rules, which proves the link end to end
 Undo everything: python3 uninstall.py"""
-import argparse, json, os, shutil, subprocess, sys, time
+import argparse, json, os, plistlib, shlex, shutil, subprocess, sys, time
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(ROOT, "team"))
@@ -40,17 +40,35 @@ def threads():
 
 
 def hook_cmd(name):
-    return f"python3 {os.path.join(ROOT, 'team', 'hooks', name)}"
+    return "python3 " + shlex.quote(os.path.join(ROOT, "team", "hooks", name))   # quoted: folders with spaces work
+
+
+def load_settings():
+    """refuse (never overwrite) a settings file that is not a valid JSON object with well-formed hooks"""
+    if not os.path.exists(SETTINGS):
+        return {}
+    try:
+        with open(SETTINGS) as f:
+            s = json.load(f)
+    except Exception as e:
+        sys.exit(f"{SETTINGS} could not be read as JSON ({e}): fix it first. Nothing was changed.")
+    H = s.get("hooks", {}) if isinstance(s, dict) else None
+    if not isinstance(H, dict) or not all(isinstance(g, list) and all(isinstance(x, dict) and isinstance(x.get("hooks", []), list) for x in g) for g in H.values()):
+        sys.exit(f"{SETTINGS} has an unexpected shape (hooks must be an object of lists): fix it first. Nothing was changed.")
+    return s
+
+
+def backup_settings():
+    if os.path.exists(SETTINGS):
+        b = os.path.join(DATA, f"settings.backup.{time.strftime('%Y%m%d-%H%M%S')}.json")
+        shutil.copyfile(SETTINGS, b); os.chmod(b, 0o600)   # settings can hold secrets: owner-only
+        print("  backup of your Claude settings:", b)
 
 
 def add_hooks():
-    s = get_json(SETTINGS, {}) if os.path.exists(SETTINGS) else {}
-    if s is None:
-        sys.exit(f"{SETTINGS} is not valid JSON: fix it first (nothing changed)")
+    s = load_settings()
     os.makedirs(os.path.dirname(SETTINGS), exist_ok=True)
-    if os.path.exists(SETTINGS):
-        b = os.path.join(DATA, f"settings.backup.{time.strftime('%Y%m%d-%H%M%S')}.json")
-        shutil.copyfile(SETTINGS, b); print("  backup of your Claude settings:", b)
+    backup_settings()
     H = s.setdefault("hooks", {})
     want = {"Stop": ({"type": "command", "command": hook_cmd("idle_wake.py"), "timeout": 21600, "asyncRewake": True}, None),
             "SessionStart": ({"type": "command", "command": hook_cmd("idle_wake.py"), "timeout": 21600, "asyncRewake": True}, None),
@@ -69,17 +87,9 @@ def add_hooks():
 def plist(name, script):
     label = f"com.claudecodexteam.{name}"
     log = os.path.join(DATA, "logs", f"{name}.log")
-    args = "".join(f"<string>{a}</string>" for a in (sys.executable, os.path.join(ROOT, script), "run"))
-    return label, f"""<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-<key>Label</key><string>{label}</string>
-<key>ProgramArguments</key><array>{args}</array>
-<key>WorkingDirectory</key><string>{ROOT}</string>
-<key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
-<key>StandardOutPath</key><string>{log}</string><key>StandardErrorPath</key><string>{log}</string>
-</dict></plist>
-"""
+    return label, plistlib.dumps({"Label": label, "ProgramArguments": [sys.executable, os.path.join(ROOT, script), "run"],
+                                  "WorkingDirectory": ROOT, "RunAtLoad": True, "KeepAlive": True,
+                                  "StandardOutPath": log, "StandardErrorPath": log})
 
 
 def start_services():
@@ -89,12 +99,37 @@ def start_services():
             print(f"    nohup python3 {os.path.join(ROOT, s)} run >/dev/null 2>&1 &")
         return
     os.makedirs(AGENTS, exist_ok=True)
+    ok = True
     for n, s in SERVICES.items():
-        label, text = plist(n, s); p = os.path.join(AGENTS, label + ".plist")
+        label, data = plist(n, s); p = os.path.join(AGENTS, label + ".plist")
         subprocess.run(["launchctl", "unload", p], capture_output=True)
-        open(p, "w").write(text)
+        with open(p, "wb") as f:
+            f.write(data)
         r = subprocess.run(["launchctl", "load", p], capture_output=True, text=True)
-        print(f"  service {label}:", "started" if r.returncode == 0 else r.stderr.strip())
+        if r.returncode != 0:
+            ok = False; print(f"  service {label}: FAILED to load: {r.stderr.strip()}"); continue
+        # verify: launchd runs OUR program (not a stale copy) and it is alive
+        pid = None
+        for _ in range(20):
+            out = subprocess.run(["launchctl", "list", label], capture_output=True, text=True).stdout
+            pid = next((l.split("=")[1].strip(" ;") for l in out.splitlines() if '"PID"' in l), None)
+            if pid:
+                break
+            time.sleep(0.5)
+        args = subprocess.run(["ps", "-p", pid, "-o", "args="], capture_output=True, text=True).stdout if pid else ""
+        if pid and os.path.join(ROOT, s) in args:
+            print(f"  service {label}: running (pid {pid})")
+        else:
+            ok = False; print(f"  service {label}: NOT running: see {os.path.join(DATA, 'logs', n + '.log')}")
+    hb = os.path.join(DATA, "wake", "heartbeat.json")
+    for _ in range(30):
+        if (get_json(hb) or {}).get("t", 0) > time.time() - 30:
+            print("  wake daemon heartbeat: OK"); break
+        time.sleep(0.5)
+    else:
+        ok = False; print("  wake daemon heartbeat: MISSING after 15 s")
+    if not ok:
+        sys.exit("A background service did not start: show this output to Claude. (Hooks are installed; python3 uninstall.py undoes everything.)")
 
 
 def main():
