@@ -13,10 +13,11 @@ evidence behind it.
 | agent | model | reasoning effort | app |
 |---|---|---|---|
 | **Claude** | Claude Opus 5.5 (Anthropic) | high | Claude Code (VS Code extension) |
-| **Astra** | Astra 6.2 (OpenAI, `gpt-6.2-astra`) | extra high | Codex (VS Code extension) |
+| **Astra** | Astra 6.2 (OpenAI, `gpt-6.2-astra`) | predominantly extra high | Codex (VS Code extension) |
 
-Every number in this README was measured with these two models at these settings. Other models or effort levels will give
-different numbers.
+These settings come from the agents' own transcripts for messages M0001–M0820. All 3,164 identified Claude responses
+ran at high effort. Astra ran 241 turns at extra high and 3 at high. The latency figures also include script and queue
+time, not just model time. Other models or effort levels will give different numbers.
 
 ---
 
@@ -230,7 +231,7 @@ build checks that stop instead of guessing.
 ---
 
 ## 5. Limitations
-- The measurements come from two specific agents (Claude Opus 5.5 on high effort, Astra 6.2 on extra-high effort) on one Mac, on one project, over two days. Other setups will see other
+- The measurements come from two specific agents (Claude Opus 5.5 on high effort, Astra 6.2 mostly on extra-high effort) on one Mac, on one project, over two days. Other setups will see other
   numbers. Run the monitor to measure your own.
 - The kit has not been compared head-to-head with every other way of connecting agents. It is the best of the designs we
   built and measured.
