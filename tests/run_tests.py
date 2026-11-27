@@ -83,6 +83,24 @@ rc, out = team("release", "gpu", "--as", "claude")
 check("lease: releasing a free lease is a harmless no-op", rc == 0 and "was not held" in out, out)
 rc, out = team("claim", "gpu", "--as", "claude", "--what", "x", "--token", "../etc")
 check("lease: tokens are plain characters only", rc != 0 and "bad token" in out, out)
+for bad in ("{not json", "[]", "{}", '{"by": 7}'):
+    open(os.path.join(DATA, "locks", "gpu.json"), "w").write(bad)
+    rc, out = team("claim", "gpu", "--as", "claude", "--what", "x", "--if-free")
+    rc2, out2 = team("release", "gpu", "--as", "claude", "--force")
+    check(f"lease: a malformed lease file ({bad}) is never treated as free", rc != 0 and rc2 != 0 and "malformed" in out and "malformed" in out2, out + out2)
+os.remove(os.path.join(DATA, "locks", "gpu.json"))
+import threading  # noqa: E402
+res = []
+th = [threading.Thread(target=lambda i=i: res.append(team("claim", "gpu", "--as", "claude", "--what", f"r{i}", "--if-free", "--token", "auto"))) for i in range(6)]
+[t.start() for t in th]; [t.join() for t in th]
+win = [o for r, o in res if r == 0]
+check("lease: six simultaneous --if-free claims by one agent -> exactly one wins", len(win) == 1, res)
+tok1 = win[0].split("token=")[-1] if win else ""
+team("release", "gpu", "--as", "claude", "--token", tok1)
+rc, out = team("claim", "gpu", "--as", "claude", "--what", "next run", "--if-free", "--token", "auto")
+rc2, out2 = team("release", "gpu", "--as", "claude", "--token", tok1)
+check("lease: an old run's token cannot release the next run's lease", rc == 0 and rc2 != 0, out + out2)
+team("release", "gpu", "--as", "claude", "--token", out.split("token=")[-1])
 rc, out = team("send", "--as", "claude", "--to", "codex", "--type", "ANSWER", "--re", "M0002", "--subject", "config.json", "--body", "The one in the project root.")
 check("mailbox: linked answer accepted", rc == 0 and "M0003" in out, out)
 rc, out = team("send", "--as", "claude", "--to", "owner", "--type", "ANSWER", "--re", "M0002", "--subject", "x", "--body", "y")

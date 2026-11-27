@@ -151,7 +151,11 @@ def main():
             sys.exit("bad token: letters, digits, . _ : - only (or 'auto' on claim)")
         with lock():
             path = os.path.join(DATA, "locks", f"{a.name}.json")
-            cur = get_json(path) or {}
+            cur = {}
+            if os.path.exists(path):   # a lease file that cannot be read is NOT a free lease: stop instead of guessing (Astra review)
+                cur = get_json(path)
+                if not isinstance(cur, dict) or "by" not in cur or not (cur["by"] is None or isinstance(cur["by"], str)):
+                    sys.exit(f"lease file {path} is unreadable or malformed: inspect it, then fix or delete it by hand")
             held = cur.get("by")
             if held not in (a.me, None):
                 sys.exit(f"held by {held}: {cur.get('what')}")

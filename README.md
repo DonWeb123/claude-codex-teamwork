@@ -37,6 +37,16 @@ You need Claude Code and Codex (the Codex extension in VS Code, or the Codex app
 
 To remove the kit later, ask Claude to uninstall it (`python uninstall.py`).
 
+**After a restart or an app update** (the link goes quiet, or the monitor reports CODEX RESTARTED):
+1. Reopen the **same** Codex chat that was chosen as the partner. Codex accepts queued wakes while the chat is closed, but
+   no turn starts until the chat is open again.
+2. In that chat and in Claude, read `team.py inbox --as <name>` and `team.py open --as <name>` to catch up.
+3. Ask Claude to run `python team/verify_link.py --new`. That sends a fresh challenge. Run `python team/verify_link.py` again
+   a few minutes later: only **LINK VERIFIED** counts. Old receipts never do.
+
+Use **one active Claude Code chat per work folder**. The Claude hooks find their chat by folder, so with two Claude chats
+open in the same folder, mail may be shown in the wrong one.
+
 ---
 
 ## Abstract
@@ -151,7 +161,7 @@ lands only when that turn ends, unless the partner checks its inbox between step
   - v3 suite: 5/5, including one test on Astra's **real** session log. 16 legacy checks gave identical results on v2 and v3.
   - Mid-turn hook: 7/7 pipe tests, then 12/12 controls after three review rounds by Astra.
   - Idle hook and monitor revision: 17/17.
-  - This kit: **48/48** core tests (`tests/run_tests.py`, including 11 lease tests) and **37/37** install/uninstall tests (`tests/test_install.py`,
+  - This kit: **54/54** core tests (`tests/run_tests.py`, including 17 lease tests) and **37/37** install/uninstall tests (`tests/test_install.py`,
     fake home folder). GitHub Actions runs both on **Windows, Ubuntu and macOS** with Python 3.10 and 3.13 on every push.
   - Live check with a real Claude Code (v2.1.332, macOS): the exec-form mid-turn hook showed Claude new mail during a tool
     call, and the idle hook woke Claude for it after its turn ended. On Windows the same hooks are covered by CI but have not
@@ -259,6 +269,7 @@ build checks that stop instead of guessing.
 ## 5. Limitations
 - The measurements come from two specific agents (Claude Opus 5.5 on high effort, Astra 6.2 mostly on extra-high effort) on one Mac, on one project, over two days. Other setups will see other
   numbers. Run the monitor to measure your own.
+- The Claude hooks pick their chat by work folder, not by session. Keep one active Claude Code chat per folder.
 - The kit has not been compared head-to-head with every other way of connecting agents. It is the best of the designs we
   built and measured.
 - Codex delivers a queued message when the receiving turn ends. A partner busy with a long task sees mail sooner only if
