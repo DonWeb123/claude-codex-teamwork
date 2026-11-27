@@ -156,6 +156,30 @@ try:
     check("renaming the partner on the same chat refused", rc != 0 and "names are fixed" in out, out[-200:])
     rc, out = install(A)
     check("reinstall on the same chat: first message not repeated", rc == 0 and "not repeated" in out, out[-200:])
+    # the Python path changed since the last install (upgrade / different interpreter): no duplicates, old ones migrated
+    st = json.load(open(SETTINGS))
+    for g in st["hooks"].values():
+        for x in g:
+            for h in x["hooks"]:
+                if h.get("args"):
+                    h["command"] = "/old/python/bin/python3"
+    open(SETTINGS, "w").write(json.dumps(st))
+    rc, out = install(A)
+    flat = [h for g in json.load(open(SETTINGS))["hooks"].values() for x in g for h in x["hooks"] if h.get("args")]
+    check("changed Python path: hooks replaced, not duplicated", rc == 0 and len(flat) == 3 and all(h["command"] == sys.executable for h in flat), flat)
+    # a settings file more private than its folder keeps exactly its protection (and so does the backup)
+    bdir = os.path.join(HOME, ".claude", "teamkit-backups"); before_bk = set(os.listdir(bdir))
+    if compat.WINDOWS:
+        subprocess.run(["icacls", SETTINGS, "/inheritance:r", "/grant:r", f"{os.environ.get('USERNAME')}:(F)"], capture_output=True)
+        want = compat.acl_sddl(SETTINGS)
+    else:
+        os.chmod(SETTINGS, 0o640); want = 0o640
+    rc, out = install(A)
+    new_bk = [os.path.join(bdir, f) for f in set(os.listdir(bdir)) - before_bk]
+    got = compat.acl_sddl(SETTINGS) if compat.WINDOWS else (os.stat(SETTINGS).st_mode & 0o777)
+    got_bk = [compat.acl_sddl(f) if compat.WINDOWS else (os.stat(f).st_mode & 0o777) for f in new_bk]
+    check("restricted settings file keeps its exact protection after rewrite, and its backup gets the same",
+          rc == 0 and want and got == want and got_bk and all(x == want for x in got_bk), (want, got, got_bk, out[-200:]))
     open(os.path.join(DATA, "hooks", "OFF"), "w").close()
     rc, out = install(A)
     check("a manual OFF switch survives a reinstall", rc == 0 and os.path.exists(os.path.join(DATA, "hooks", "OFF")), out[-200:])

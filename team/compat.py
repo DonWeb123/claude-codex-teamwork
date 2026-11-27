@@ -123,6 +123,30 @@ def args_has(args, path):
     return norm(os.path.abspath(path)) in norm(args or "")
 
 
+def acl_sddl(path):
+    """Windows: the file's security descriptor as SDDL text (None if it cannot be read). Other systems: None."""
+    if not WINDOWS:
+        return None
+    exe = shutil.which("powershell") or shutil.which("pwsh") or "powershell"
+    r = subprocess.run([exe, "-NoProfile", "-NonInteractive", "-Command", "(Get-Acl -LiteralPath $args[0]).Sddl", path],
+                       capture_output=True, text=True, timeout=30)
+    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+
+
+def copy_protection(src, dst):
+    """give dst exactly src's permissions (POSIX mode bits; on Windows the full ACL, verified). False = could not."""
+    if not WINDOWS:
+        try:
+            shutil.copymode(src, dst); return True
+        except OSError:
+            return False
+    exe = shutil.which("powershell") or shutil.which("pwsh") or "powershell"
+    r = subprocess.run([exe, "-NoProfile", "-NonInteractive", "-Command", "Get-Acl -LiteralPath $args[0] | Set-Acl -LiteralPath $args[1]", src, dst],
+                       capture_output=True, text=True, timeout=30)
+    want = acl_sddl(src)
+    return r.returncode == 0 and want is not None and acl_sddl(dst) == want
+
+
 def notify(title, text):
     if os.environ.get("TEAMKIT_DRY") == "1":
         return

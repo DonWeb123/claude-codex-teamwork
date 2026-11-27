@@ -55,10 +55,11 @@ def hook_spec(name):
 
 
 def is_ours(h, name):
-    """exactly this kit's hook for `name`: the current exec form, or a shell form written by an earlier version (migrated)"""
+    """exactly this kit's hook for `name`: exec form with this copy's script as the only argument (whatever Python ran it, so
+    a changed or upgraded Python path is still recognised and migrated), or a shell form written by an earlier version"""
     p = hook_path(name)
     if h.get("args") is not None:
-        return h.get("command") == sys.executable and h.get("args") == [p]
+        return h.get("args") == [p]
     import shlex
     legacy = {f"python3 {p}", f"python3 {shlex.quote(p)}", f"{compat.q(sys.executable)} {compat.q(p)}"}
     return h.get("command") in legacy
@@ -107,15 +108,29 @@ def backup_settings():
     fd = os.open(b, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "wb") as f:
         f.write(data)
+    if not compat.copy_protection(SETTINGS, b):   # the backup is never less private than the original
+        os.remove(b)
+        raise SetupError("could not give the settings backup the same permissions as your settings file: nothing was changed")
     print("  backup of your Claude settings:", b)
     return b, data
 
 
 def restore_file(path, data):
-    """put a file back to its exact earlier bytes (None = it did not exist)"""
+    """put a file back to its exact earlier bytes (None = it did not exist); when the file exists, its current protection
+    (mode / Windows ACL) is carried over; if that fails, the bytes are written in place so the file keeps its own ACL"""
     if data is None:
         if os.path.exists(path):
             os.remove(path)
+        return
+    if os.path.exists(path):
+        tmp = f"{path}.restore.{os.getpid()}"
+        with open(tmp, "wb") as f:
+            f.write(data)
+        if compat.copy_protection(path, tmp):
+            os.replace(tmp, path); return
+        os.remove(tmp)
+        with open(path, "r+b") as f:   # in place: the file object (and its ACL) stays the same
+            f.write(data); f.truncate()
         return
     tmp = f"{path}.restore.{os.getpid()}"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -136,21 +151,33 @@ def add_hooks():
     s = load_settings()
     os.makedirs(os.path.dirname(SETTINGS), exist_ok=True)
     H = s.setdefault("hooks", {})
-    for ev in list(H):   # migrate: drop this kit's hooks written by an earlier version (shell form), keep everything else
-        H[ev] = [dict(g, hooks=[x for x in g.get("hooks", []) if not (x.get("args") is None and ours_any(x))]) for g in H[ev]]
+    for ev in list(H):   # migrate: drop every earlier registration of this kit's hooks (old shell form, old Python path), keep everything else
+        H[ev] = [dict(g, hooks=[x for x in g.get("hooks", []) if not ours_any(x)]) for g in H[ev]]
         H[ev] = [g for g in H[ev] if g["hooks"]]
     want = {"Stop": (dict(hook_spec("idle_wake.py"), timeout=21600, asyncRewake=True), None, "idle_wake.py"),
             "SessionStart": (dict(hook_spec("idle_wake.py"), timeout=21600, asyncRewake=True), None, "idle_wake.py"),
             "PostToolUse": (dict(hook_spec("midturn.py"), timeout=10), "*", "midturn.py")}
     for ev, (h, matcher, name) in want.items():
         groups = H.setdefault(ev, [])
-        if any(is_ours(x, name) for g in groups for x in g.get("hooks", [])):
-            continue
         g = {"hooks": [h]}
         if matcher:
             g["matcher"] = matcher
         groups.append(g)
-    put_json(SETTINGS, s); print("  hooks added to", SETTINGS)
+    write_settings(s); print("  hooks added to", SETTINGS)
+
+
+def write_settings(obj):
+    """atomic rewrite that keeps the settings file's own protection: POSIX mode bits, and on Windows its exact ACL (verified).
+    Refuses (raises SetupError, file untouched) if that protection cannot be carried over."""
+    if not os.path.exists(SETTINGS):
+        put_json(SETTINGS, obj); return
+    tmp = f"{SETTINGS}.teamkit.{os.getpid()}.tmp"
+    with open(tmp, "w") as f:
+        json.dump(obj, f, indent=2)
+    if not compat.copy_protection(SETTINGS, tmp):
+        os.remove(tmp)
+        raise SetupError(f"could not give the new {SETTINGS} the same permissions as the current one: nothing was changed")
+    os.replace(tmp, SETTINGS)
 
 
 def start_services():

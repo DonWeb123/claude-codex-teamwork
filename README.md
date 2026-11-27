@@ -148,7 +148,7 @@ lands only when that turn ends, unless the partner checks its inbox between step
   - v3 suite: 5/5, including one test on Astra's **real** session log. 16 legacy checks gave identical results on v2 and v3.
   - Mid-turn hook: 7/7 pipe tests, then 12/12 controls after three review rounds by Astra.
   - Idle hook and monitor revision: 17/17.
-  - This kit: **29/29** core tests (`tests/run_tests.py`) and **33/33** install/uninstall tests (`tests/test_install.py`,
+  - This kit: **29/29** core tests (`tests/run_tests.py`) and **35/35** install/uninstall tests (`tests/test_install.py`,
     fake home folder). GitHub Actions runs both on **Windows, Ubuntu and macOS** with Python 3.10 and 3.13 on every push.
   - Live check with a real Claude Code (v2.1.332, macOS): the exec-form mid-turn hook showed Claude new mail during a tool
     call, and the idle hook woke Claude for it after its turn ended. On Windows the same hooks are covered by CI but have not
@@ -247,8 +247,9 @@ build checks that stop instead of guessing.
   it checks its inbox between steps.
 
 ## 6. Privacy and safety
-- **Stored only on your computer:** the mailbox files, wake and hook records, logs and settings backups (in `team-data/`),
-  plus `config.json`. Git ignores both. Settings backups are readable by you only. The *contents* of messages are also shown
+- **Stored only on your computer:** the mailbox files, wake and hook records and logs (in `team-data/`), plus `config.json`;
+  Git ignores both. Backups of your Claude settings go next to that file, in `~/.claude/teamkit-backups/`, and get exactly the
+  same permissions as the settings file itself (on Windows, its full access-control list, checked after copying). The *contents* of messages are also shown
   to both AI services (see the next points).
 - **One copy of the kit = one partner chat.** To pair Claude with a different Codex chat, unzip a fresh copy into a new
   folder. A new chat never sees the old mailbox.

@@ -46,7 +46,10 @@ for n in services.NAMES:
     else:
         failed.append(n); print(f"WARNING: {n} did not stop; its auto-start file was kept" + (f": {p}" if p else ""))
 if any(install.ours_any(h) for g in s.get("hooks", {}).values() for x in g for h in x.get("hooks", [])):
-    install.backup_settings()
+    try:
+        install.backup_settings()
+    except install.SetupError as e:
+        sys.exit(str(e))
     for ev in list(s["hooks"]):
         groups = []
         for g in s["hooks"][ev]:
@@ -57,7 +60,11 @@ if any(install.ours_any(h) for g in s.get("hooks", {}).values() for x in g for h
             s["hooks"][ev] = groups
         else:
             del s["hooks"][ev]
-    put_json(install.SETTINGS, s); print("hooks removed from", install.SETTINGS)
+    try:
+        install.write_settings(s)
+    except install.SetupError as e:
+        sys.exit(str(e))
+    print("hooks removed from", install.SETTINGS)
 if failed:
     sys.exit(f"UNINSTALL INCOMPLETE: {', '.join(failed)} still running. Show this output to Claude.")
 print("uninstalled (team-data/ kept)")
