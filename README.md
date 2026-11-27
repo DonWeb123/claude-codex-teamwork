@@ -23,7 +23,8 @@ time, not just model time. Other models or effort levels will give different num
 
 ## Quick start (no technical knowledge needed)
 
-You need Claude Code and Codex (the Codex extension in VS Code, or the Codex app) on a Mac.
+You need Claude Code and Codex (the Codex extension in VS Code, or the Codex app) on a **Mac or Windows PC**
+(Linux works too). Claude checks for Python and helps install it if it is missing (Windows does not include it).
 
 1. **Download** this repository: the green **Code** button, then **Download ZIP**. Unzip it somewhere you'll keep it,
    for example your Documents folder.
@@ -34,7 +35,7 @@ You need Claude Code and Codex (the Codex extension in VS Code, or the Codex app
    first message. When the partner answers, the link has been shown to work.
 5. Restart Claude Code in that folder when Claude asks you to.
 
-To remove the kit later, ask Claude to run `python3 uninstall.py`.
+To remove the kit later, ask Claude to uninstall it (`python uninstall.py`).
 
 ---
 
@@ -147,8 +148,8 @@ lands only when that turn ends, unless the partner checks its inbox between step
   - v3 suite: 5/5, including one test on Astra's **real** session log. 16 legacy checks gave identical results on v2 and v3.
   - Mid-turn hook: 7/7 pipe tests, then 12/12 controls after three review rounds by Astra.
   - Idle hook and monitor revision: 17/17.
-  - This kit: **29/29** core tests (`python3 tests/run_tests.py`) and **25/25** install/uninstall tests
-    (`python3 tests/test_install.py`, fake home folder). Astra reviewed the kit's privacy and safety over several rounds before release.
+  - This kit: **29/29** core tests (`tests/run_tests.py`) and **27/27** install/uninstall tests (`tests/test_install.py`,
+    fake home folder). GitHub Actions runs both on **Windows, Ubuntu and macOS** with Python 3.10 and 3.13 on every push. Astra reviewed the kit's privacy and safety over several rounds before release.
 
 ### 3.3 Token efficiency
 
@@ -257,8 +258,15 @@ build checks that stop instead of guessing.
 - Hooks run only when Claude works inside the folders listed in `config.json`. Kill switch: `touch team-data/hooks/OFF`.
 
 ## Requirements
-macOS with Python 3.8+ (pre-installed with Apple's developer tools), Claude Code, and Codex (the VS Code extension or the app).
-On Linux everything works except the auto-start services. The installer prints the two commands to run instead.
+Python 3.8+, Claude Code, and Codex (the VS Code extension or the app), on:
+
+| system | background services start at login via | notes |
+|---|---|---|
+| macOS | launchd (`~/Library/LaunchAgents`) | Python comes with Apple's developer tools |
+| Windows 10/11 | the Startup folder (no admin rights needed), running windowless | install Python from python.org or the Microsoft Store first |
+| Linux | not automatic: the installer prints the two commands to run | |
+
+Standard library only: nothing else to install.
 
 ## License
 MIT
