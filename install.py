@@ -151,7 +151,7 @@ def restore_file(path, data):
         if os.path.exists(path):
             os.remove(path)
         return
-    if os.path.exists(path):
+    if os.path.exists(path) and os.path.abspath(path) == os.path.abspath(SETTINGS):   # only the user's own settings carry a protection to keep
         tmp = f"{path}.restore.{os.getpid()}.{os.urandom(3).hex()}"
         try:
             protected_new(path, tmp)

@@ -116,11 +116,13 @@ def stop(n):
             subprocess.run(LAUNCHCTL + ["unload", p], capture_output=True)
     elif pid:
         compat.kill(pid)
-    for _ in range(40):
+    end = time.time() + 15   # a time limit, not a count: on Windows every process check starts PowerShell (1-2 s)
+    while True:
         if (pid is None or compat.gone(pid)) and (backend() != "launchd" or _launchd_pid(n) is None):
             return True
+        if time.time() > end:
+            return False
         time.sleep(0.25)
-    return False
 
 
 def _spawn(n):
@@ -146,7 +148,8 @@ def start(n):
             raise RuntimeError(f"{label(n)} failed to load: {r.stderr.strip()}")
     else:
         _spawn(n)
-    for _ in range(40):
+    end = time.time() + 20
+    while time.time() < end:
         pid = running_pid(n)
         if pid and pid != UNKNOWN and (b == "launchd" or (get_json(os.path.join(DATA, "wake", f"{n}.pid.json")) or {}).get("t", t0) >= t0 - 1):
             return pid
