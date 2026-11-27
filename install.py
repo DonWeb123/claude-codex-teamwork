@@ -54,19 +54,33 @@ def hook_spec(name):
     return {"type": "command", "command": sys.executable, "args": [hook_path(name)]}
 
 
+REGISTERED = os.path.join(DATA, "hooks", "registered.json")   # the exact hook entries this copy wrote into the settings
+
+
+def recorded():
+    r = get_json(REGISTERED, []) or []
+    return [x for x in r if isinstance(x, dict)] if isinstance(r, list) else []
+
+
 def is_ours(h, name):
-    """exactly this kit's hook for `name`: exec form with this copy's script as the only argument (whatever Python ran it, so
-    a changed or upgraded Python path is still recognised and migrated), or a shell form written by an earlier version"""
+    """exactly this kit's hook for `name`, and nothing else: an entry this copy recorded when it wrote it (so a later Python move
+    is still migrated exactly), the entry it would write now, or the plain `python3 <script>` form of the first versions.
+    Never a pattern: another tool that happens to run the same script (e.g. a checker) is left alone."""
     p = hook_path(name)
+    if h in [x for x in recorded() if x.get("args") == [p] or p in str(x.get("command", ""))]:
+        return True
     if h.get("args") is not None:
-        return h.get("args") == [p]
+        return h == want_hook(name)
     import shlex
-    legacy = {f"python3 {p}", f"python3 {shlex.quote(p)}", f"{compat.q(sys.executable)} {compat.q(p)}"}
-    return h.get("command") in legacy
+    return h.get("command") in {f"python3 {p}", f"python3 {shlex.quote(p)}"} and set(h) <= {"type", "command", "timeout", "asyncRewake"}
 
 
 def ours_any(h):
     return is_ours(h, "idle_wake.py") or is_ours(h, "midturn.py")
+
+
+def want_hook(name):
+    return dict(hook_spec(name), timeout=21600, asyncRewake=True) if name == "idle_wake.py" else dict(hook_spec(name), timeout=10)
 
 
 def hook_cmd(name):   # kept for older callers
@@ -96,6 +110,25 @@ def load_settings():
     return s
 
 
+def protected_new(src, path):
+    """create `path` EMPTY and exclusively, give it src's protection and verify that, and only then return - so no byte is
+    ever written into a file that is less private than src. Removes it and raises SetupError on failure."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600); os.close(fd)
+    if not compat.copy_protection(src, path):
+        os.remove(path)
+        raise SetupError(f"could not give {path} the same permissions as {src}: nothing was changed"
+                         + (f" ({compat.LAST_ERROR})" if compat.LAST_ERROR else ""))
+
+
+def fill(path, data):
+    """write bytes into an existing (already protected) file; on failure the file is removed"""
+    try:
+        with open(path, "r+b") as f:
+            f.write(data); f.truncate()
+    except OSError:
+        os.remove(path); raise
+
+
 def backup_settings():
     """unique backup created BEFORE any byte is copied into it, kept NEXT TO the settings file (in your user profile, so it is
     exactly as private as the original on every system - never in the shareable kit folder); 0600 where the OS supports it"""
@@ -105,13 +138,8 @@ def backup_settings():
         data = f.read()
     d = os.path.join(os.path.dirname(SETTINGS), "teamkit-backups"); os.makedirs(d, mode=0o700, exist_ok=True)
     b = os.path.join(d, f"settings.backup.{time.strftime('%Y%m%d-%H%M%S')}.{os.getpid()}.{os.urandom(3).hex()}.json")
-    fd = os.open(b, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "wb") as f:
-        f.write(data)
-    if not compat.copy_protection(SETTINGS, b):   # the backup is never less private than the original
-        os.remove(b)
-        raise SetupError("could not give the settings backup the same permissions as your settings file: nothing was changed"
-                         + (f" ({compat.LAST_ERROR})" if compat.LAST_ERROR else ""))
+    protected_new(SETTINGS, b)   # the backup is never less private than the original, not even for a moment
+    fill(b, data)
     print("  backup of your Claude settings:", b)
     return b, data
 
@@ -124,17 +152,18 @@ def restore_file(path, data):
             os.remove(path)
         return
     if os.path.exists(path):
-        tmp = f"{path}.restore.{os.getpid()}"
-        with open(tmp, "wb") as f:
-            f.write(data)
-        if compat.copy_protection(path, tmp):
-            os.replace(tmp, path); return
-        os.remove(tmp)
+        tmp = f"{path}.restore.{os.getpid()}.{os.urandom(3).hex()}"
+        try:
+            protected_new(path, tmp)
+        except SetupError:
+            tmp = None
+        if tmp:
+            fill(tmp, data); os.replace(tmp, path); return
         with open(path, "r+b") as f:   # in place: the file object (and its ACL) stays the same
             f.write(data); f.truncate()
         return
-    tmp = f"{path}.restore.{os.getpid()}"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    tmp = f"{path}.restore.{os.getpid()}.{os.urandom(3).hex()}"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "wb") as f:
         f.write(data)
     os.replace(tmp, path)
@@ -155,15 +184,16 @@ def add_hooks():
     for ev in list(H):   # migrate: drop every earlier registration of this kit's hooks (old shell form, old Python path), keep everything else
         H[ev] = [dict(g, hooks=[x for x in g.get("hooks", []) if not ours_any(x)]) for g in H[ev]]
         H[ev] = [g for g in H[ev] if g["hooks"]]
-    want = {"Stop": (dict(hook_spec("idle_wake.py"), timeout=21600, asyncRewake=True), None, "idle_wake.py"),
-            "SessionStart": (dict(hook_spec("idle_wake.py"), timeout=21600, asyncRewake=True), None, "idle_wake.py"),
-            "PostToolUse": (dict(hook_spec("midturn.py"), timeout=10), "*", "midturn.py")}
+    want = {"Stop": (want_hook("idle_wake.py"), None, "idle_wake.py"),
+            "SessionStart": (want_hook("idle_wake.py"), None, "idle_wake.py"),
+            "PostToolUse": (want_hook("midturn.py"), "*", "midturn.py")}
     for ev, (h, matcher, name) in want.items():
         groups = H.setdefault(ev, [])
         g = {"hooks": [h]}
         if matcher:
             g["matcher"] = matcher
         groups.append(g)
+    put_json(REGISTERED, [want_hook("idle_wake.py"), want_hook("midturn.py")])   # recorded BEFORE the settings change
     write_settings(s); print("  hooks added to", SETTINGS)
 
 
@@ -172,13 +202,9 @@ def write_settings(obj):
     Refuses (raises SetupError, file untouched) if that protection cannot be carried over."""
     if not os.path.exists(SETTINGS):
         put_json(SETTINGS, obj); return
-    tmp = f"{SETTINGS}.teamkit.{os.getpid()}.tmp"
-    with open(tmp, "w") as f:
-        json.dump(obj, f, indent=2)
-    if not compat.copy_protection(SETTINGS, tmp):
-        os.remove(tmp)
-        raise SetupError(f"could not give the new {SETTINGS} the same permissions as the current one: nothing was changed"
-                         + (f" ({compat.LAST_ERROR})" if compat.LAST_ERROR else ""))
+    tmp = f"{SETTINGS}.teamkit.{os.getpid()}.{os.urandom(3).hex()}.tmp"
+    protected_new(SETTINGS, tmp)   # protected and verified while still empty
+    fill(tmp, json.dumps(obj, indent=2).encode())
     os.replace(tmp, SETTINGS)
 
 
@@ -281,6 +307,7 @@ def main():
     had_services = {n: read_bytes(services.unit_file(n)) for n in SERVICES} if use_svc else {}
     was_running = {n: services.running_pid(n) is not None for n in SERVICES} if use_svc else {}
     keep[BINDING] = read_bytes(BINDING)
+    keep[REGISTERED] = read_bytes(REGISTERED)
     old = get_json(CONFIG, {}) or {}
     cfg = {"claude_name": a.claude_name, "partner_name": a.partner_name, "codex_thread": a.thread, "work_dirs": work,
            "installed_at": old.get("installed_at") or time.time(),

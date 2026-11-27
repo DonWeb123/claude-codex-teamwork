@@ -82,7 +82,7 @@ def main():
         sys.stdout.flush()   # print FIRST, then move the checkpoint
         try:
             with open(os.path.join(H, "midturn_log.jsonl"), "a") as f:
-                f.write(json.dumps({"t": round(time.time(), 3), "ids": [f"M{x[1]:04d}" for x in items if x[0] == "m"], "alerts": len(a_new)}) + "\n")
+                f.write(json.dumps({"t": round(time.time(), 3), "ids": [f"M{x[1]:04d}" for x in items if x[0] == "m"], "alerts": len(a_new), "session": hook.get("session_id")}) + "\n")
         except Exception:
             pass
     last = max([x[1] for x in items], default=st.get("max_id", top))

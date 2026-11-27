@@ -142,8 +142,31 @@ check("health: latency measured from real messages", any("claude->codex: seen" i
 out = commhealth.tick(now=time.time() + 3600, ps_out=ps2)
 check("health: mail unseen > 10 min and a stale daemon raise COMM DEGRADED", "COMM DEGRADED" in open(os.path.join(DATA, "wake", "alerts.jsonl")).read() and any("open incidents" in line and not line.endswith(": 0") for line in out), out)
 # ---------- link check (receipts only)
-r = subprocess.run([sys.executable, os.path.join(ROOT, "team", "verify_link.py")], capture_output=True, text=True, env=ENV)
-check("verify_link: no HANDOFF yet -> not verified", r.returncode != 0, r.stdout)
+VL = [sys.executable, os.path.join(ROOT, "team", "verify_link.py")]
+os.makedirs(os.path.join(DATA, "hooks"), exist_ok=True)
+json.dump({"codex_thread": THREAD, "partner_name": "codex", "claude_name": "claude"}, open(os.path.join(DATA, "binding.json"), "w"))
+for e in ({"t": time.time() - 86400, "ids": ["M9999"]},):   # yesterday's receipts must never count
+    open(os.path.join(DATA, "hooks", "midturn_log.jsonl"), "a").write(json.dumps(e) + "\n")
+r = subprocess.run(VL, capture_output=True, text=True, env=ENV)
+ch = get_json(os.path.join(DATA, "hooks", "link_challenge.json")) or {}
+check("verify_link: first run sends a fresh challenge with a one-time code, not verified", r.returncode == 2 and ch.get("code") and ch.get("thread") == THREAD, r.stdout + r.stderr)
+r = subprocess.run(VL, capture_output=True, text=True, env=ENV)
+check("verify_link: nothing proven yet -> NOT VERIFIED", r.returncode == 1 and "NOT VERIFIED" in r.stdout, r.stdout)
+cid, code = ch["id"], ch["code"]
+mk = "wake:linktest1"
+json.dump({"wakes": [{"t": time.time(), "marker": mk, "delivered": "2026-01-01T00:00:01Z"}]}, open(os.path.join(DATA, "wake", f"{cid}.wakes.json"), "w"))
+sub = subprocess.run([sys.executable, os.path.join(ROOT, "team", "team.py"), "send", "--as", "codex", "--to", "claude", "--type", "ANSWER",
+                      "--re", cid, "--subject", "ok", "--body", f"code {code}"], capture_output=True, text=True, env=ENV).stdout.split()[1]
+r = subprocess.run(VL, capture_output=True, text=True, env=ENV)
+check("verify_link: reply not in the bound chat's log (marker absent too) -> NOT VERIFIED", r.returncode == 1 and "FAIL 1." in r.stdout and "FAIL 2." in r.stdout, r.stdout)
+with open(LOG, "a") as f:
+    f.write(json.dumps({"type": "event_msg", "payload": {"type": "user_message", "message": f"[{mk}] mail"}}) + "\n")
+    f.write(json.dumps({"type": "response_item", "payload": {"type": "function_call_output", "output": f"sent {sub}"}}) + "\n")
+r = subprocess.run(VL, capture_output=True, text=True, env=ENV)
+check("verify_link: marker + reply from that chat but no hook receipt -> NOT VERIFIED", r.returncode == 1 and "PASS 2." in r.stdout and "FAIL 3." in r.stdout, r.stdout)
+open(os.path.join(DATA, "hooks", "midturn_log.jsonl"), "a").write(json.dumps({"t": time.time(), "ids": [sub], "session": "s-1"}) + "\n")
+r = subprocess.run(VL, capture_output=True, text=True, env=ENV)
+check("verify_link: all three proven after the challenge -> LINK VERIFIED", r.returncode == 0 and "LINK VERIFIED" in r.stdout and "s-1" in r.stdout, r.stdout)
 n = sum(RESULTS)
 print(f"\n{n}/{len(RESULTS)} passed  (temp folder: {TMP})")
 sys.exit(0 if n == len(RESULTS) else 1)

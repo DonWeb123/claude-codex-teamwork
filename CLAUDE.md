@@ -13,11 +13,12 @@ explain in plain words, and ask only what you cannot find out yourself.
 3. Ask which chat is the partner (show the names), and what they want to call it (default `codex`).
 4. `python install.py --thread <id> --partner-name <name>` (add `--work-dir <their project folder>` if Claude
    should also listen there). It runs the self-tests first and stops if any fail.
-5. Tell them to restart Claude Code in this folder (so the hooks load). Once the partner has answered the first message,
-   run `python team/verify_link.py`. It passes only when the receipts prove all three steps: the wake reached the partner's
-   chat, the partner answered, and the answer reached Claude **through a hook**. Do not read the inbox by hand before
-   running it; that would not prove the hooks work. Tell them it works only after it prints LINK VERIFIED. On Windows this
-   is also the first live check of the hooks there: if step 3 fails, report it, with `team-data/hooks/receipts.jsonl`.
+5. Tell them to restart Claude Code in this folder (so the hooks load). Then run `python team/verify_link.py`: it sends
+   the partner a fresh link-check message with a one-time code. Wait a few minutes (stay idle so the hooks can work) and run it
+   again. It prints LINK VERIFIED only when new receipts prove all three steps: the wake reached the bound partner chat, the
+   partner answered from that chat with the code, and the answer reached Claude **through a hook**. Do not read the inbox by
+   hand first; that proves nothing. Old receipts never count. On Windows this is the first live check of the hooks there: if
+   step 3 fails, report it with `team-data/hooks/receipts.jsonl`. `--new` sends a fresh challenge.
 
 ## Working with the partner
 - Read new mail: `python team/team.py inbox --as claude`, then `ack` it.

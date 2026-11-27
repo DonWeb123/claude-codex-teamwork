@@ -64,6 +64,8 @@ if any(install.ours_any(h) for g in s.get("hooks", {}).values() for x in g for h
         install.write_settings(s)
     except install.SetupError as e:
         sys.exit(str(e))
+    if os.path.exists(install.REGISTERED):
+        os.remove(install.REGISTERED)
     print("hooks removed from", install.SETTINGS)
 if failed:
     sys.exit(f"UNINSTALL INCOMPLETE: {', '.join(failed)} still running. Show this output to Claude.")

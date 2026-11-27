@@ -163,10 +163,15 @@ try:
             for h in x["hooks"]:
                 if h.get("args"):
                     h["command"] = "/old/python/bin/python3"
+    REG = os.path.join(DATA, "hooks", "registered.json")   # what that earlier install recorded: the old Python path
+    reg = json.load(open(REG)); [r.update(command="/old/python/bin/python3") for r in reg]; open(REG, "w").write(json.dumps(reg))
+    checker = {"type": "command", "command": "/usr/local/bin/some-checker", "args": [os.path.join(ROOT, "team", "hooks", "idle_wake.py")]}
+    st["hooks"]["Stop"].append({"hooks": [checker]})   # another tool that runs our script as its argument: never ours
     open(SETTINGS, "w").write(json.dumps(st))
     rc, out = install(A)
-    flat = [h for g in json.load(open(SETTINGS))["hooks"].values() for x in g for h in x["hooks"] if h.get("args")]
-    check("changed Python path: hooks replaced, not duplicated", rc == 0 and len(flat) == 3 and all(h["command"] == sys.executable for h in flat), flat)
+    flat = [h for g in json.load(open(SETTINGS))["hooks"].values() for x in g for h in x["hooks"] if h.get("args") and h != checker]
+    check("changed Python path: recorded hooks replaced exactly, not duplicated", rc == 0 and len(flat) == 3 and all(h["command"] == sys.executable for h in flat), flat)
+    check("an unrelated checker running the same script is kept", any(h == checker for g in json.load(open(SETTINGS))["hooks"].values() for x in g for h in x["hooks"]))
     # a settings file more private than its folder keeps exactly its protection (and so does the backup)
     bdir = os.path.join(HOME, ".claude", "teamkit-backups"); before_bk = set(os.listdir(bdir))
     if compat.WINDOWS:
@@ -194,7 +199,7 @@ try:
     cmds = [h["command"] for g in left.values() for x in g for h in x["hooks"]]
     check("uninstall: services stopped before their plists were deleted", rc == 0 and not alive(p1) and not alive(p2)
           and not os.listdir(os.path.join(HOME, "Library", "LaunchAgents")), out[-300:])
-    check("uninstall: exactly our hooks removed, look-alike and other hooks kept", sorted(cmds) == sorted(["echo other", f"python3 {ROOT}/team/hooks/idle_wake.py --someone-elses"]), cmds)
+    check("uninstall: exactly our hooks removed, look-alike and other hooks kept", sorted(cmds) == sorted(["echo other", "/usr/local/bin/some-checker", f"python3 {ROOT}/team/hooks/idle_wake.py --someone-elses"]), cmds)
     check("uninstall: hooks disarmed", os.path.exists(os.path.join(DATA, "hooks", "OFF")))
     rc, out = install(A)
     check("install after uninstall re-arms the hooks it disarmed", rc == 0 and not os.path.exists(os.path.join(DATA, "hooks", "OFF")), out[-200:])
