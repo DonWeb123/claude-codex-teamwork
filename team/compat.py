@@ -123,28 +123,63 @@ def args_has(args, path):
     return norm(os.path.abspath(path)) in norm(args or "")
 
 
+def _ps(script, **env):
+    """run a PowerShell script; paths go in through environment variables (arguments after -Command are NOT $args)"""
+    exe = shutil.which("powershell") or shutil.which("pwsh") or "powershell"
+    e = dict(os.environ); e.update(env)
+    return subprocess.run([exe, "-NoProfile", "-NonInteractive", "-Command", script], capture_output=True, text=True, timeout=60, env=e)
+
+
 def acl_sddl(path):
     """Windows: the file's security descriptor as SDDL text (None if it cannot be read). Other systems: None."""
     if not WINDOWS:
         return None
-    exe = shutil.which("powershell") or shutil.which("pwsh") or "powershell"
-    r = subprocess.run([exe, "-NoProfile", "-NonInteractive", "-Command", "(Get-Acl -LiteralPath $args[0]).Sddl", path],
-                       capture_output=True, text=True, timeout=30)
+    r = _ps("(Get-Acl -LiteralPath $env:TK_P).Sddl", TK_P=path)
     return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
 
 
+_RULES = r"""((Get-Acl -LiteralPath $env:TK_P).Access | ForEach-Object { "$($_.IdentityReference)|$([int]$_.FileSystemRights)|$($_.AccessControlType)" } | Sort-Object -Unique) -join ';'"""
+
+
+def acl_rules(path):
+    """Windows: who may do what to the file (effective access rules, sorted text). None if unreadable / not Windows."""
+    if not WINDOWS:
+        return None
+    r = _ps(_RULES, TK_P=path)
+    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+
+
+_COPY_ACL = r"""
+$ErrorActionPreference = 'Stop'
+function Rules($p) { ((Get-Acl -LiteralPath $p).Access | ForEach-Object { "$($_.IdentityReference)|$([int]$_.FileSystemRights)|$($_.AccessControlType)" } | Sort-Object -Unique) -join ';' }
+$src = Get-Acl -LiteralPath $env:TK_SRC
+$want = Rules $env:TK_SRC
+$dst = Get-Acl -LiteralPath $env:TK_DST
+$dst.SetSecurityDescriptorSddlForm($src.GetSecurityDescriptorSddlForm('Access'), 'Access')
+Set-Acl -LiteralPath $env:TK_DST -AclObject $dst
+if ((Rules $env:TK_DST) -ne $want) {
+  # different folder, different inherited entries: freeze the source's effective rules onto the file instead
+  $src.SetAccessRuleProtection($true, $true)
+  $dst = Get-Acl -LiteralPath $env:TK_DST
+  $dst.SetSecurityDescriptorSddlForm($src.GetSecurityDescriptorSddlForm('Access'), 'Access')
+  Set-Acl -LiteralPath $env:TK_DST -AclObject $dst
+}
+if ((Rules $env:TK_DST) -ne $want) { Write-Error "permissions differ"; exit 3 }
+"""
+
+
 def copy_protection(src, dst):
-    """give dst exactly src's permissions (POSIX mode bits; on Windows the full ACL, verified). False = could not."""
+    """give dst the same protection as src: POSIX mode bits; on Windows the same effective access rules (verified).
+    False = could not."""
     if not WINDOWS:
         try:
             shutil.copymode(src, dst); return True
         except OSError:
             return False
-    exe = shutil.which("powershell") or shutil.which("pwsh") or "powershell"
-    r = subprocess.run([exe, "-NoProfile", "-NonInteractive", "-Command", "Get-Acl -LiteralPath $args[0] | Set-Acl -LiteralPath $args[1]", src, dst],
-                       capture_output=True, text=True, timeout=30)
-    want = acl_sddl(src)
-    return r.returncode == 0 and want is not None and acl_sddl(dst) == want
+    try:
+        return _ps(_COPY_ACL, TK_SRC=os.path.abspath(src), TK_DST=os.path.abspath(dst)).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def notify(title, text):

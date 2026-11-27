@@ -171,13 +171,13 @@ try:
     bdir = os.path.join(HOME, ".claude", "teamkit-backups"); before_bk = set(os.listdir(bdir))
     if compat.WINDOWS:
         subprocess.run(["icacls", SETTINGS, "/inheritance:r", "/grant:r", f"{os.environ.get('USERNAME')}:(F)"], capture_output=True)
-        want = compat.acl_sddl(SETTINGS)
+        want = compat.acl_rules(SETTINGS)
     else:
         os.chmod(SETTINGS, 0o640); want = 0o640
     rc, out = install(A)
     new_bk = [os.path.join(bdir, f) for f in set(os.listdir(bdir)) - before_bk]
-    got = compat.acl_sddl(SETTINGS) if compat.WINDOWS else (os.stat(SETTINGS).st_mode & 0o777)
-    got_bk = [compat.acl_sddl(f) if compat.WINDOWS else (os.stat(f).st_mode & 0o777) for f in new_bk]
+    got = compat.acl_rules(SETTINGS) if compat.WINDOWS else (os.stat(SETTINGS).st_mode & 0o777)
+    got_bk = [compat.acl_rules(f) if compat.WINDOWS else (os.stat(f).st_mode & 0o777) for f in new_bk]
     check("restricted settings file keeps its exact protection after rewrite, and its backup gets the same",
           rc == 0 and want and got == want and got_bk and all(x == want for x in got_bk), (want, got, got_bk, out[-200:]))
     open(os.path.join(DATA, "hooks", "OFF"), "w").close()
