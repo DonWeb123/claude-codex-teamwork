@@ -168,6 +168,9 @@ if ((Rules $env:TK_DST) -ne $want) { Write-Error "permissions differ"; exit 3 }
 """
 
 
+LAST_ERROR = ""   # why the last copy_protection failed (Windows)
+
+
 def copy_protection(src, dst):
     """give dst the same protection as src: POSIX mode bits; on Windows the same effective access rules (verified).
     False = could not."""
@@ -176,10 +179,13 @@ def copy_protection(src, dst):
             shutil.copymode(src, dst); return True
         except OSError:
             return False
+    global LAST_ERROR
     try:
-        return _ps(_COPY_ACL, TK_SRC=os.path.abspath(src), TK_DST=os.path.abspath(dst)).returncode == 0
-    except (OSError, subprocess.SubprocessError):
-        return False
+        r = _ps(_COPY_ACL, TK_SRC=os.path.abspath(src), TK_DST=os.path.abspath(dst))
+    except (OSError, subprocess.SubprocessError) as e:
+        LAST_ERROR = str(e); return False
+    LAST_ERROR = (r.stderr or r.stdout).strip()[-400:]
+    return r.returncode == 0
 
 
 def notify(title, text):

@@ -110,7 +110,8 @@ def backup_settings():
         f.write(data)
     if not compat.copy_protection(SETTINGS, b):   # the backup is never less private than the original
         os.remove(b)
-        raise SetupError("could not give the settings backup the same permissions as your settings file: nothing was changed")
+        raise SetupError("could not give the settings backup the same permissions as your settings file: nothing was changed"
+                         + (f" ({compat.LAST_ERROR})" if compat.LAST_ERROR else ""))
     print("  backup of your Claude settings:", b)
     return b, data
 
@@ -176,7 +177,8 @@ def write_settings(obj):
         json.dump(obj, f, indent=2)
     if not compat.copy_protection(SETTINGS, tmp):
         os.remove(tmp)
-        raise SetupError(f"could not give the new {SETTINGS} the same permissions as the current one: nothing was changed")
+        raise SetupError(f"could not give the new {SETTINGS} the same permissions as the current one: nothing was changed"
+                         + (f" ({compat.LAST_ERROR})" if compat.LAST_ERROR else ""))
     os.replace(tmp, SETTINGS)
 
 
