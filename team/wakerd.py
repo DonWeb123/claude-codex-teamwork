@@ -12,7 +12,7 @@ Reacts to new mail within ~0.2-0.5 s (watches the mailbox folder), with a 10 s b
   python3 wakerd.py run | once | status        TEAMKIT_DRY=1 = never call codex, never notify"""
 import calendar, fcntl, glob, json, os, re, subprocess, sys, time, uuid
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import DATA, cfg, get_json, put_json, msgs, acked, answered, alert, find_codex, codex_home, team_cmd
+from common import DATA, cfg, get_json, put_json, msgs, acked, answered, alert, find_codex, codex_home, team_cmd, binding, write_pid
 
 W = os.path.join(DATA, "wake")
 REWAKE_S, MAX_WAKES, NOSTART_S, REPLY_DEADLINE_S = 900, 3, 300, 2700
@@ -102,6 +102,9 @@ def queue(text):
     C = cfg()
     if DRY:
         return "DRY", "dry run"
+    b = binding()   # delivery goes ONLY to the chat this mailbox is bound to, whatever config.json says
+    if not b or b["codex_thread"] != C.get("codex_thread"):
+        return None, "routing refused: config.json chat does not match this mailbox's binding (team-data/binding.json)"
     codex = find_codex()
     if not codex:
         return None, "codex CLI not found"
@@ -219,6 +222,8 @@ if __name__ == "__main__":
             fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             sys.exit("another wakerd is already running")
+        if c == "run":
+            write_pid("wakerd")
         if c == "once":
             print("woke:", [m["id"] for m in tick()]); sys.exit(0)
         while True:

@@ -9,7 +9,7 @@ Reports p50/p90 and how many messages have no proof yet. Pages COMM DEGRADED (on
 Writes team-data/wake/COMM_HEALTH.md.        python3 commhealth.py once | run"""
 import math, os, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import DATA, cfg, get_json, put_json, msgs, alert
+from common import DATA, cfg, get_json, put_json, msgs, alert, write_pid
 from wakerd import iso, codex_appservers
 
 W = os.path.join(DATA, "wake"); H = os.path.join(DATA, "hooks")
@@ -104,6 +104,7 @@ if __name__ == "__main__":
     if c == "once":
         print("\n".join(tick()))
     elif c == "run":
+        write_pid("commhealth")
         while True:
             try:
                 tick()

@@ -30,7 +30,7 @@ if not os.path.exists(off):
 print("hooks disarmed (team-data/hooks/OFF)")
 w = get_json(os.path.join(H, "waiter.json")) or {}
 if isinstance(w.get("pid"), int):
-    ps = lambda f: subprocess.run(["ps", "-p", str(w["pid"]), "-o", f + "="], capture_output=True, text=True).stdout.strip()
+    ps = lambda f: subprocess.run(["ps", "-ww", "-p", str(w["pid"]), "-o", f + "="], capture_output=True, text=True).stdout.strip()
     # only OUR waiter: same program AND same process start time as it recorded (a reused pid has a different start)
     if os.path.join(ROOT, "team", "hooks", "idle_wake.py") in ps("args") and w.get("start") and ps("lstart") == w["start"]:
         os.kill(w["pid"], signal.SIGTERM); print("stopped the waiting idle hook", w["pid"])
@@ -45,6 +45,22 @@ if install.HAS_LAUNCHD:
             os.remove(p); print("stopped", n)
         else:
             failed.append(n); print(f"WARNING: {n} did not stop; its plist was kept: {p}")
+else:   # no launchd (Linux): stop manually started daemons, verified by program AND start time
+    import time as _t
+    for n, script in install.SERVICES.items():
+        r = get_json(os.path.join(DATA, "wake", f"{n}.pid.json")) or {}
+        if not isinstance(r.get("pid"), int):
+            continue
+        ps = lambda f: subprocess.run(["ps", "-ww", "-p", str(r["pid"]), "-o", f + "="], capture_output=True, text=True).stdout.strip()
+        if os.path.join(ROOT, script) not in ps("args") or ps("lstart") != r.get("start"):
+            continue   # not running, or the pid now belongs to something else
+        os.kill(r["pid"], signal.SIGTERM)
+        for _ in range(20):
+            if install.gone(r["pid"]):
+                print("stopped", n); break
+            _t.sleep(0.5)
+        else:
+            failed.append(n); print(f"WARNING: {n} (pid {r['pid']}) did not stop")
 mine = {install.hook_cmd("idle_wake.py"), install.hook_cmd("midturn.py")}
 if any(h.get("command") in mine for g in s.get("hooks", {}).values() for x in g for h in x.get("hooks", [])):
     install.backup_settings()

@@ -94,6 +94,23 @@ def codex_home():
     return os.environ.get("TEAMKIT_CODEX_HOME") or os.path.expanduser("~/.codex")
 
 
+BINDING = os.path.join(DATA, "binding.json")
+
+
+def binding():
+    """the chat + names this mailbox belongs to, or None if absent/invalid (every field required)"""
+    b = get_json(BINDING)
+    ok = isinstance(b, dict) and all(isinstance(b.get(k), str) and b.get(k).strip() for k in ("codex_thread", "partner_name", "claude_name"))
+    return b if ok else None
+
+
+def write_pid(name):
+    """record a running daemon (pid + start time) so a manual stop can verify it is ours"""
+    import subprocess
+    st = subprocess.run(["ps", "-p", str(os.getpid()), "-o", "lstart="], capture_output=True, text=True).stdout.strip()
+    put_json(os.path.join(DATA, "wake", f"{name}.pid.json"), {"pid": os.getpid(), "start": st})
+
+
 def team_cmd():
     import shlex
     return "python3 " + shlex.quote(os.path.join(ROOT, "team", "team.py"))   # quoted: folders with spaces work

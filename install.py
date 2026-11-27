@@ -17,7 +17,7 @@ import argparse, fcntl, json, os, plistlib, re, shlex, subprocess, sys, time
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(ROOT, "team"))
-from common import DATA, CONFIG, find_codex, codex_home, get_json, put_json, team_cmd, msgs
+from common import DATA, CONFIG, find_codex, codex_home, get_json, put_json, team_cmd, msgs, binding as valid_binding
 
 SETTINGS = os.path.expanduser("~/.claude/settings.json")
 AGENTS = os.path.expanduser("~/Library/LaunchAgents")
@@ -145,6 +145,12 @@ def plist_owned(label, script):
         return False
 
 
+def gone(pid):
+    """True when the process no longer runs (absent, or a zombie that only waits to be reaped)"""
+    st = subprocess.run(["ps", "-p", str(pid), "-o", "stat="], capture_output=True, text=True).stdout.strip()
+    return not st or st.startswith("Z")
+
+
 def service_pid(label):
     out = subprocess.run([LAUNCHCTL, "list", label], capture_output=True, text=True).stdout
     pid = next((l.split("=")[1].strip(" ;") for l in out.splitlines() if '"PID"' in l), None)
@@ -159,7 +165,7 @@ def stop_service(n):
     pid = service_pid(label)
     subprocess.run([LAUNCHCTL, "unload", p], capture_output=True)
     for _ in range(20):
-        if service_pid(label) is None and (pid is None or subprocess.run(["ps", "-p", str(pid)], capture_output=True).returncode != 0):
+        if service_pid(label) is None and (pid is None or gone(pid)):
             return True
         time.sleep(0.5)
     return False
@@ -171,6 +177,7 @@ def start_services():
         print("  not macOS: start these yourself and keep them running:")
         for s in SERVICES.values():
             print(f"    nohup python3 {shlex.quote(os.path.join(ROOT, s))} run >/dev/null 2>&1 &")
+        print("  to stop them later: python3 uninstall.py (it checks each one really exited)")
         return
     os.makedirs(AGENTS, exist_ok=True); pids = {}; t_launch = time.time()
     for n, s in SERVICES.items():
@@ -188,7 +195,7 @@ def start_services():
             if pid:
                 break
             time.sleep(0.5)
-        args = subprocess.run(["ps", "-p", str(pid), "-o", "args="], capture_output=True, text=True).stdout if pid else ""
+        args = subprocess.run(["ps", "-ww", "-p", str(pid), "-o", "args="], capture_output=True, text=True).stdout if pid else ""
         if not pid or os.path.join(ROOT, s) not in args:
             raise SetupError(f"{label} is not running our program (see {os.path.join(DATA, 'logs', n + '.log')})")
         pids[n] = pid; print(f"  service {label}: running (pid {pid})")
@@ -245,9 +252,9 @@ def main():
             raise SetupError("pick a different --partner-name")
         if a.thread not in {i for _, i, _ in T}:
             raise SetupError(f"--thread {a.thread!r} is not one of your Codex chats (exact id from --list-threads)")
-        bind = get_json(BINDING) if os.path.exists(BINDING) else None
+        bind = valid_binding() if os.path.exists(BINDING) else None
         has_mail = bool(msgs())
-        if os.path.exists(BINDING) and not isinstance(bind, dict):
+        if os.path.exists(BINDING) and bind is None:
             raise SetupError(f"{BINDING} is damaged, so this mailbox's partner cannot be verified. Use a fresh copy of the kit. Nothing was changed.")
         if bind is None and has_mail:
             raise SetupError("This mailbox already holds messages but no record of which chat they belong to. "
@@ -298,7 +305,7 @@ def main():
         print("3. Claude hooks"); backup_settings(); add_hooks()
         if not a.no_services:
             print("4. background services"); start_services()
-        if cfg.get("handoff_thread") == a.thread or (bind or {}).get("handoff_sent"):
+        if cfg.get("handoff_thread") == a.thread or (bind or {}).get("handoff_sent") is True:
             print("5. first message already sent to this chat earlier (not repeated)")
         else:
             body = (f"Hello {a.partner_name}, this is {a.claude_name}. We now share a mailbox so we can work as a team. "
@@ -311,7 +318,7 @@ def main():
             if r.returncode != 0 or not r.stdout.startswith("sent "):
                 raise SetupError("the first message could not be sent: " + (r.stdout + r.stderr).strip()[-300:])
             cfg["handoff_thread"] = a.thread; put_json(CONFIG, cfg)
-            put_json(BINDING, dict(get_json(BINDING, {}) or {}, handoff_sent=True))
+            put_json(BINDING, dict(valid_binding() or {}, handoff_sent=True))
             print("5. first message to the partner:", r.stdout.strip())
     except (SetupError, OSError, subprocess.SubprocessError) as e:
         print(f"\nSETUP FAILED: {e}\nPutting everything back as it was ...")

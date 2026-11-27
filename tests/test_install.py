@@ -121,6 +121,18 @@ try:
     rc, out = install(B)
     check("config.json damaged: pairing a different chat still refused", rc != 0 and not any(B in c for c in calls()), out[-200:])
     open(CONFIG, "w").write(cb)
+    bb = open(os.path.join(DATA, "binding.json")).read(); open(os.path.join(DATA, "binding.json"), "w").write("{}")
+    rc, out = install(B)
+    check("empty binding: pairing a different chat refused", rc != 0 and not any(B in c for c in calls()), out[-200:])
+    open(os.path.join(DATA, "binding.json"), "w").write(bb)
+    c = json.load(open(CONFIG)); c["codex_thread"] = B; json.dump(c, open(CONFIG, "w"))
+    n1 = len(calls())
+    subprocess.run([sys.executable, os.path.join(ROOT, "team", "team.py"), "send", "--as", "claude", "--to", "astra", "--type", "FYI", "--re", "none",
+                    "--subject", "ROUTE-TEST", "--body", "x"], env=ENV, capture_output=True)
+    time.sleep(1.5)
+    check("config edited to chat B: the wake daemon still refuses to deliver to B", not any(B in c for c in calls()[n1:])
+          and "routing refused" in open(os.path.join(DATA, "wake", "alerts.jsonl")).read())
+    open(CONFIG, "w").write(cb)
     rc, out = run(os.path.join(ROOT, "install.py"), "--thread", A, "--partner-name", "renamed", "--skip-tests")
     check("renaming the partner on the same chat refused", rc != 0 and "names are fixed" in out, out[-200:])
     rc, out = install(A)
@@ -159,8 +171,17 @@ try:
     r = subprocess.run([sys.executable, os.path.join(ROOT, "install.py"), "--thread", A, "--partner-name", "astra", "--skip-tests"],
                        capture_output=True, text=True, env=E2, cwd=ROOT, timeout=60)
     check("no launchctl (Linux): setup completes with manual start commands", r.returncode == 0 and "nohup" in r.stdout, (r.stdout + r.stderr)[-300:])
+    json.dump({"claude_name": "claude", "partner_name": "astra", "codex_thread": A, "work_dirs": [ROOT]}, open(E2["TEAMKIT_CONFIG"], "w"))
+    procs = [subprocess.Popen([sys.executable, os.path.join(ROOT, sc), "run"], env=E2, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+             for sc in ("team/wakerd.py", "team/commhealth.py")]
+    time.sleep(1.5)
     r = subprocess.run([sys.executable, os.path.join(ROOT, "uninstall.py")], capture_output=True, text=True, env=E2, cwd=ROOT, timeout=60)
-    check("no launchctl (Linux): uninstall completes", r.returncode == 0, (r.stdout + r.stderr)[-300:])
+    time.sleep(0.3)
+    check("no launchctl (Linux): uninstall stops manually started daemons and says so", r.returncode == 0 and r.stdout.count("stopped") >= 2
+          and all(p.poll() is not None for p in procs), (r.stdout, [p.poll() for p in procs]))
+    for p in procs:
+        if p.poll() is None:
+            p.kill()
 finally:
     for f in os.listdir(STATE):
         try:

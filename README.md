@@ -147,7 +147,7 @@ lands only when that turn ends, unless the partner checks its inbox between step
   - v3 suite: 5/5, including one test on Astra's **real** session log. 16 legacy checks gave identical results on v2 and v3.
   - Mid-turn hook: 7/7 pipe tests, then 12/12 controls after three review rounds by Astra.
   - Idle hook and monitor revision: 17/17.
-  - This kit: **29/29** core tests (`python3 tests/run_tests.py`) and **23/23** install/uninstall tests
+  - This kit: **29/29** core tests (`python3 tests/run_tests.py`) and **25/25** install/uninstall tests
     (`python3 tests/test_install.py`, fake home folder). Astra reviewed the kit's privacy and safety over several rounds before release.
 
 ### 3.3 Token efficiency
