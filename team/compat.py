@@ -33,9 +33,17 @@ def lock(path, blocking=True, timeout=30.0):
             time.sleep(0.05)
 
 
-def _powershell(script):
+def _ps(script, **env):
+    """run a PowerShell script. Paths go in through environment variables (arguments after -Command are NOT $args).
+    PSModulePath is dropped: one inherited from PowerShell 7 stops Windows PowerShell 5.1 from loading its own modules
+    (Get-Acl then fails with 'module Microsoft.PowerShell.Security could not be loaded')."""
     exe = shutil.which("powershell") or shutil.which("pwsh") or "powershell"
-    r = subprocess.run([exe, "-NoProfile", "-NonInteractive", "-Command", script], capture_output=True, text=True, timeout=30)
+    e = {k: v for k, v in os.environ.items() if k.upper() != "PSMODULEPATH"}; e.update(env)
+    return subprocess.run([exe, "-NoProfile", "-NonInteractive", "-Command", script], capture_output=True, text=True, timeout=60, env=e)
+
+
+def _powershell(script):
+    r = _ps(script)
     if r.returncode != 0:
         return None
     try:
@@ -121,13 +129,6 @@ def args_has(args, path):
     """does a process command line mention this file? (slash- and, on Windows, case-insensitive)"""
     norm = lambda x: str(x).replace("\\", "/").lower() if WINDOWS else str(x).replace("\\", "/")
     return norm(os.path.abspath(path)) in norm(args or "")
-
-
-def _ps(script, **env):
-    """run a PowerShell script; paths go in through environment variables (arguments after -Command are NOT $args)"""
-    exe = shutil.which("powershell") or shutil.which("pwsh") or "powershell"
-    e = dict(os.environ); e.update(env)
-    return subprocess.run([exe, "-NoProfile", "-NonInteractive", "-Command", script], capture_output=True, text=True, timeout=60, env=e)
 
 
 def acl_sddl(path):
