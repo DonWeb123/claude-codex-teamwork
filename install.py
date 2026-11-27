@@ -370,8 +370,10 @@ def main():
         os.remove(off); print("  hooks re-armed (the earlier uninstall had turned them off)")
     elif os.path.exists(off):
         print("  NOTE: hooks stay OFF because team-data/hooks/OFF exists (you created it). Delete it to turn them on.")
-    print(f"\nDone. Restart Claude Code in {ROOT} so the hooks load, then check the link with:\n"
-          f"  {compat.q(sys.executable)} {compat.q(os.path.join(ROOT, 'team', 'commhealth.py'))} once")
+    vl = f"{compat.q(sys.executable)} {compat.q(os.path.join(ROOT, 'team', 'verify_link.py'))}"
+    print(f"\nDone. Restart Claude Code in {ROOT} so the hooks load. Then prove the link live:\n"
+          f"  {vl} --new     (sends the partner a fresh challenge)\n"
+          f"  {vl}           (a few minutes later: must print LINK VERIFIED)")
 
 
 if __name__ == "__main__":
