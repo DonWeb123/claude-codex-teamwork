@@ -17,11 +17,22 @@ try:
 except install.SetupError as e:
     sys.exit(str(e))
 H = os.path.join(DATA, "hooks")
-open(os.path.join(H, "OFF"), "w").close(); print("hooks disarmed (team-data/hooks/OFF)")
+import fcntl  # noqa: E402
+lk = open(os.path.join(DATA, "locks", "install.lock"), "w")
+try:
+    fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    sys.exit("another install or uninstall of this kit is running")
+failed = []
+off = os.path.join(H, "OFF")
+if not os.path.exists(off):
+    open(off, "w").write("uninstall")   # marks it as ours, so a later install may re-arm; a manual OFF is never touched
+print("hooks disarmed (team-data/hooks/OFF)")
 w = get_json(os.path.join(H, "waiter.json")) or {}
 if isinstance(w.get("pid"), int):
-    args = subprocess.run(["ps", "-p", str(w["pid"]), "-o", "args="], capture_output=True, text=True).stdout
-    if os.path.join(ROOT, "team", "hooks", "idle_wake.py") in args:   # only OUR waiter, never a reused pid
+    ps = lambda f: subprocess.run(["ps", "-p", str(w["pid"]), "-o", f + "="], capture_output=True, text=True).stdout.strip()
+    # only OUR waiter: same program AND same process start time as it recorded (a reused pid has a different start)
+    if os.path.join(ROOT, "team", "hooks", "idle_wake.py") in ps("args") and w.get("start") and ps("lstart") == w["start"]:
         os.kill(w["pid"], signal.SIGTERM); print("stopped the waiting idle hook", w["pid"])
 if sys.platform == "darwin" or install.LAUNCHCTL != "launchctl":
     for n, script in install.SERVICES.items():
@@ -33,7 +44,7 @@ if sys.platform == "darwin" or install.LAUNCHCTL != "launchctl":
         if install.stop_service(n):
             os.remove(p); print("stopped", n)
         else:
-            print(f"WARNING: {n} did not stop; its plist was kept: {p}")
+            failed.append(n); print(f"WARNING: {n} did not stop; its plist was kept: {p}")
 mine = {install.hook_cmd("idle_wake.py"), install.hook_cmd("midturn.py")}
 if any(h.get("command") in mine for g in s.get("hooks", {}).values() for x in g for h in x.get("hooks", [])):
     install.backup_settings()
@@ -48,4 +59,6 @@ if any(h.get("command") in mine for g in s.get("hooks", {}).values() for x in g 
         else:
             del s["hooks"][ev]
     put_json(install.SETTINGS, s); print("hooks removed from", install.SETTINGS)
-print("uninstalled (team-data/ kept; delete team-data/hooks/OFF if you install again)")
+if failed:
+    sys.exit(f"UNINSTALL INCOMPLETE: {', '.join(failed)} still running. Show this output to Claude.")
+print("uninstalled (team-data/ kept)")

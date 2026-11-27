@@ -64,7 +64,9 @@ def main():
     except BlockingIOError:
         return 0
     me = cfg()["claude_name"]; t0 = time.time()
-    put_json(os.path.join(H, "waiter.json"), {"pid": os.getpid(), "since": t0, "session": hook.get("session_id")})
+    import subprocess
+    start = subprocess.run(["ps", "-p", str(os.getpid()), "-o", "lstart="], capture_output=True, text=True).stdout.strip()
+    put_json(os.path.join(H, "waiter.json"), {"pid": os.getpid(), "start": start, "since": t0, "session": hook.get("session_id")})
     log("armed", event=hook.get("hook_event_name"), session=hook.get("session_id"))
     cur_p = os.path.join(H, "alert_cursor.json")
     while True:

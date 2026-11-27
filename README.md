@@ -51,8 +51,8 @@ The final design combines four parts:
 - a passive monitor that measures latency from real traffic.
 
 Measured results:
-- **Wake time:** about 7 s before the redesign, **0.195 s** after. This runs from the moment a message is written to the
-  moment the wake is sent. In the same live probe a busy Astra acknowledged the message from its inbox at **12.96 s**; the
+- **Wake time:** about 7 s before the redesign. In one recorded live probe afterwards, the wake was recorded
+  **0.195 s** after the message was written. In the same live probe a busy Astra acknowledged the message from its inbox at **12.96 s**; the
   wake itself reached Astra's chat when its current turn ended, at 84.5 s.
 - **Seen by the receiver:** over the ~22 hours after the redesign, all **316** messages eligible for an immediate wake had
   evidence that the receiver saw them. None was missing.
@@ -117,12 +117,16 @@ Claude each owned one direction of the link and reviewed the other's.
 
 | metric | before v3 | after v3 |
 |---|---|---|
-| message written → wake sent | ~7 s | **0.195 s** |
+| message written → wake recorded (one live probe) | ~7 s | **0.195 s** |
 | live test: idle Astra woken by a RESULT message | never woke (RESULT/FYI didn't trigger a wake) | **2.975 s** (marker matched to the turn) |
 | busy Astra acknowledges a message from its inbox | at the end of its turn | **12.96 s** |
 | same probe: wake lands in busy Astra's chat | at turn end | 84.5 s (at the end of that turn) |
 | Claude→Astra, until delivery confirmed | median 6.6 s, worst 312 s (n=41) | median **8.3 s**, p90 98.7 s (n=143) |
 | Astra→Claude: until Claude acknowledged (before) / until first evidence Claude saw it (after) | median 207 s, p90 485 s, worst 793 s (n=40) | median **9.6 s**, p90 **47.6 s** (n=173) |
+
+Evidence that a message was seen differs by direction. For Claude→Astra it is the wake marker appearing in Astra's
+session log, Astra's acknowledgement, or a linked reply. For Astra→Claude it is a mid-turn hook notice, an idle-hook
+wake, Claude's acknowledgement, or a linked reply.
 
 The "after" rows cover ~22 hours of real work on the original Forge setup. They count only messages due an immediate
 wake; a later change held back some informational notes on purpose, and those are left out. The Astra→Claude
@@ -143,7 +147,7 @@ lands only when that turn ends, unless the partner checks its inbox between step
   - v3 suite: 5/5, including one test on Astra's **real** session log. 16 legacy checks gave identical results on v2 and v3.
   - Mid-turn hook: 7/7 pipe tests, then 12/12 controls after three review rounds by Astra.
   - Idle hook and monitor revision: 17/17.
-  - This kit: **29/29** core tests (`python3 tests/run_tests.py`) and **16/16** install/uninstall tests
+  - This kit: **29/29** core tests (`python3 tests/run_tests.py`) and **18/18** install/uninstall tests
     (`python3 tests/test_install.py`, fake home folder). Astra reviewed the kit's privacy and safety over several rounds before release.
 
 ### 3.3 Token efficiency
@@ -239,8 +243,11 @@ build checks that stop instead of guessing.
   it checks its inbox between steps.
 
 ## 6. Privacy and safety
-- Everything stays on your computer in `team-data/`. Git ignores that folder, along with `config.json`. Settings backups are
-  readable by you only.
+- **Stored only on your computer:** the mailbox files, wake and hook records, logs and settings backups (in `team-data/`),
+  plus `config.json`. Git ignores both. Settings backups are readable by you only. The *contents* of messages are also shown
+  to both AI services (see the next points).
+- **One copy of the kit = one partner chat.** To pair Claude with a different Codex chat, unzip a fresh copy into a new
+  folder. A new chat never sees the old mailbox.
 - The kit only reads Codex's local session logs and calls `codex queue`. It opens no other network connection.
 - **What the AI services see.** Message subjects, bodies and file paths are shown to both agents (wakes, hook notices,
   `inbox`), so they become part of those chats and go to Anthropic and OpenAI like anything else you type there. The

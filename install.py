@@ -2,7 +2,7 @@
 """Set up the Claude + Codex teamwork kit on this computer (macOS; Linux works without the auto-start services).
 
   python3 install.py --list-threads                       show recent Codex chats (pick the partner's)
-  python3 install.py --thread <CHAT-ID> [--partner-name codex] [--work-dir PATH ...] [--no-services] [--skip-tests] [--carry-unread]
+  python3 install.py --thread <CHAT-ID> [--partner-name codex] [--work-dir PATH ...] [--no-services] [--skip-tests]
 
 Setup is all-or-nothing: everything is validated first, and if any later step fails, config.json, your Claude settings
 and the services are put back exactly as they were, so mail keeps going where it went before.
@@ -11,9 +11,9 @@ and the services are put back exactly as they were, so mail keeps going where it
   3. 3 hooks in ~/.claude/settings.json (owner-only backup first)
   4. wake daemon + health monitor as login services (launchd), verified running
   5. a first message to the partner with the team rules
-Switching to a different Codex chat starts that chat with a clean slate: older unread mail is NOT replayed to it
-unless you pass --carry-unread.   Undo everything: python3 uninstall.py"""
-import argparse, json, os, plistlib, re, shlex, subprocess, sys, time
+One copy of the kit = one partner chat. To pair with a different Codex chat, use a fresh copy of the kit in another folder
+(the old mailbox is never shown to a new chat).   Undo everything: python3 uninstall.py"""
+import argparse, fcntl, json, os, plistlib, re, shlex, subprocess, sys, time
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(ROOT, "team"))
@@ -211,7 +211,7 @@ def main():
     ap.add_argument("--list-threads", action="store_true"); ap.add_argument("--thread")
     ap.add_argument("--partner-name", default="codex"); ap.add_argument("--claude-name", default="claude")
     ap.add_argument("--work-dir", action="append", default=[]); ap.add_argument("--no-services", action="store_true")
-    ap.add_argument("--skip-tests", action="store_true"); ap.add_argument("--carry-unread", action="store_true")
+    ap.add_argument("--skip-tests", action="store_true")
     a = ap.parse_args()
     if sys.version_info < (3, 8):
         sys.exit("Python 3.8 or newer is needed")
@@ -226,6 +226,11 @@ def main():
         if not codex:
             print("WARNING: the Codex command-line tool was not found (it ships inside the Codex VS Code extension / app).")
         return
+    lk = open(os.path.join(DATA, "locks", "install.lock"), "w")   # one install/uninstall at a time
+    try:
+        fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.exit("another install or uninstall of this kit is running")
     # ---- validate EVERYTHING before changing anything
     try:
         if not codex:
@@ -238,6 +243,10 @@ def main():
             raise SetupError("pick a different --partner-name")
         if a.thread not in {i for _, i, _ in T}:
             raise SetupError(f"--thread {a.thread!r} is not one of your Codex chats (exact id from --list-threads)")
+        prev = (get_json(CONFIG, {}) or {}).get("codex_thread")
+        if prev and prev != a.thread:
+            raise SetupError("This copy of the kit is already paired with another Codex chat. To pair a different chat, "
+                             "unzip a fresh copy of the kit into a new folder and set that one up. Nothing was changed.")
         load_settings()
         if not a.no_services:
             for n, sc in SERVICES.items():
@@ -258,22 +267,19 @@ def main():
             os.path.join(W, "baseline.json"): read_bytes(os.path.join(W, "baseline.json")),
             os.path.join(W, "partner_log.json"): read_bytes(os.path.join(W, "partner_log.json"))}
     had_services = {n: read_bytes(os.path.join(AGENTS, f"com.claudecodexteam.{n}.plist")) for n in SERVICES}
+    was_running = {n: service_pid(f"com.claudecodexteam.{n}") is not None for n in SERVICES} if not a.no_services else {}
     old = get_json(CONFIG, {}) or {}
     cfg = {"claude_name": a.claude_name, "partner_name": a.partner_name, "codex_thread": a.thread, "work_dirs": work,
            "installed_at": old.get("installed_at") or time.time(),
-           "handoff_thread": old.get("handoff_thread") if old.get("codex_thread") == a.thread else None}
-    new_chat = old.get("codex_thread") not in (None, a.thread)
+           "handoff_thread": old.get("handoff_thread")}
     try:
         if not a.no_services:
             for n in SERVICES:   # nothing may deliver while routing changes
                 if not stop_service(n):
                     raise SetupError(f"could not stop the running {n}")
         ids = [int(m["id"][1:]) for m in msgs() if str(m.get("id", ""))[1:].isdigit()]
-        if not os.path.exists(os.path.join(W, "baseline.json")) or (new_chat and not a.carry_unread):
-            # a new chat starts clean: wake only for mail sent from now on (incl. the first message below)
+        if not os.path.exists(os.path.join(W, "baseline.json")):   # wake only for mail sent from now on (incl. the first message below)
             put_json(os.path.join(W, "baseline.json"), {"id": max(ids or [0]), "t": time.time(), "chat": a.thread})
-        if new_chat and os.path.exists(os.path.join(W, "partner_log.json")):
-            os.remove(os.path.join(W, "partner_log.json"))   # log position belonged to the previous chat
         put_json(CONFIG, cfg); print("2. config written:", CONFIG)
         print("3. Claude hooks"); backup_settings(); add_hooks()
         if not a.no_services:
@@ -298,17 +304,29 @@ def main():
             remove_services()
         for path, data in keep.items():
             restore_file(path, data)
+        bad = []
         if not a.no_services:
-            for n, data in had_services.items():   # restart the services that were running before, on the old routing
+            for n, data in had_services.items():   # put back each service file, and its running/stopped state
+                p = os.path.join(AGENTS, f"com.claudecodexteam.{n}.plist")
                 if data is not None:
-                    p = os.path.join(AGENTS, f"com.claudecodexteam.{n}.plist")
                     with open(p, "wb") as f:
                         f.write(data)
+                if was_running.get(n):
                     subprocess.run([LAUNCHCTL, "load", p], capture_output=True)
+                    for _ in range(20):
+                        if service_pid(f"com.claudecodexteam.{n}"):
+                            break
+                        time.sleep(0.5)
+                    else:
+                        bad.append(n)
+        if bad:
+            sys.exit(f"Rolled back config and Claude settings, but could NOT restart: {', '.join(bad)}. Show this output to Claude.")
         sys.exit("Rolled back: config, Claude settings and services are as before. Show this output to Claude.")
     off = os.path.join(DATA, "hooks", "OFF")
-    if os.path.exists(off):
-        os.remove(off); print("  hooks re-armed (an earlier uninstall had turned them off)")
+    if os.path.exists(off) and open(off).read().strip() == "uninstall":   # a manual OFF is yours: it stays
+        os.remove(off); print("  hooks re-armed (the earlier uninstall had turned them off)")
+    elif os.path.exists(off):
+        print("  NOTE: hooks stay OFF because team-data/hooks/OFF exists (you created it). Delete it to turn them on.")
     print(f"\nDone. Restart Claude Code in {ROOT} so the hooks load, then check the link with:\n"
           f"  python3 {shlex.quote(os.path.join(ROOT, 'team', 'commhealth.py'))} once")
 
