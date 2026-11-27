@@ -159,14 +159,44 @@ sub = subprocess.run([sys.executable, os.path.join(ROOT, "team", "team.py"), "se
                       "--re", cid, "--subject", "ok", "--body", f"code {code}"], capture_output=True, text=True, env=ENV).stdout.split()[1]
 r = subprocess.run(VL, capture_output=True, text=True, env=ENV)
 check("verify_link: reply not in the bound chat's log (marker absent too) -> NOT VERIFIED", r.returncode == 1 and "FAIL 1." in r.stdout and "FAIL 2." in r.stdout, r.stdout)
-with open(LOG, "a") as f:
-    f.write(json.dumps({"type": "event_msg", "payload": {"type": "user_message", "message": f"[{mk}] mail"}}) + "\n")
-    f.write(json.dumps({"type": "response_item", "payload": {"type": "function_call_output", "output": f"sent {sub}"}}) + "\n")
+def utc(t):
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t)) + ".000Z"
+
+
+def send_event(mid, t):   # what Codex really logs when the chat runs team.py send (item_completed / CommandExecution)
+    return {"timestamp": utc(t), "type": "event_msg", "payload": {"type": "item_completed", "item": {
+        "type": "CommandExecution", "command": ["/bin/zsh", "-lc", "python3 team/team.py send --as codex ..."],
+        "aggregated_output": f"sent {mid}\n", "exit_code": 0}}}
+
+
+with open(LOG, "a") as f:   # BEFORE the challenge: a send result and a body that merely quotes "sent <id>" must not count
+    f.write(json.dumps({"timestamp": utc(ch["t"] - 600), "type": "event_msg", "payload": {"type": "user_message", "message": f"[{mk}] old"}}) + "\n")
+    f.write(json.dumps(send_event(sub, ch["t"] - 600)) + "\n")
+    f.write(json.dumps({"timestamp": utc(time.time()), "type": "response_item", "payload": {"type": "message", "role": "assistant",
+                        "content": [{"type": "output_text", "text": f"I will reply: sent {sub}"}]}}) + "\n")
 r = subprocess.run(VL, capture_output=True, text=True, env=ENV)
-check("verify_link: marker + reply from that chat but no hook receipt -> NOT VERIFIED", r.returncode == 1 and "PASS 2." in r.stdout and "FAIL 3." in r.stdout, r.stdout)
+check("verify_link: pre-challenge events and quoted text in the transcript do not count", r.returncode == 1 and "FAIL 1." in r.stdout and "FAIL 2." in r.stdout, r.stdout)
+with open(LOG, "a") as f:
+    f.write(json.dumps({"timestamp": utc(time.time()), "type": "event_msg", "payload": {"type": "user_message", "message": f"[{mk}] mail"}}) + "\n")
+    f.write(json.dumps(send_event(sub, time.time())) + "\n")
+r = subprocess.run(VL, capture_output=True, text=True, env=ENV)
+check("verify_link: marker + real send result from that chat but no hook receipt -> NOT VERIFIED", r.returncode == 1 and "PASS 1." in r.stdout and "PASS 2." in r.stdout and "FAIL 3." in r.stdout, r.stdout)
+open(os.path.join(DATA, "hooks", "midturn_log.jsonl"), "a").write(json.dumps({"t": time.time(), "ids": [sub]}) + "\n")
+r = subprocess.run(VL, capture_output=True, text=True, env=ENV)
+check("verify_link: a hook receipt without a Claude session does not count", r.returncode == 1 and "FAIL 3." in r.stdout, r.stdout)
 open(os.path.join(DATA, "hooks", "midturn_log.jsonl"), "a").write(json.dumps({"t": time.time(), "ids": [sub], "session": "s-1"}) + "\n")
 r = subprocess.run(VL, capture_output=True, text=True, env=ENV)
 check("verify_link: all three proven after the challenge -> LINK VERIFIED", r.returncode == 0 and "LINK VERIFIED" in r.stdout and "s-1" in r.stdout, r.stdout)
+# returning user: a verified pair is reinstalled (new install id) with the hooks offline -> must stay pending until a fresh round trip
+c = json.load(open(CONFIG)); c["install_id"] = "reinstalled-1"; json.dump(c, open(CONFIG, "w"))
+open(os.path.join(DATA, "hooks", "OFF"), "w").write("x")
+r1 = subprocess.run(VL, capture_output=True, text=True, env=ENV)
+r2 = subprocess.run(VL, capture_output=True, text=True, env=ENV)
+ch2 = get_json(os.path.join(DATA, "hooks", "link_challenge.json")) or {}
+check("verify_link: after a reinstall the old success never counts: new challenge, stays NOT VERIFIED with hooks offline",
+      r1.returncode == 2 and ch2.get("id") != cid and ch2.get("install_id") == "reinstalled-1" and r2.returncode == 1 and "NOT VERIFIED" in r2.stdout,
+      r1.stdout + r2.stdout)
+os.remove(os.path.join(DATA, "hooks", "OFF"))
 n = sum(RESULTS)
 print(f"\n{n}/{len(RESULTS)} passed  (temp folder: {TMP})")
 sys.exit(0 if n == len(RESULTS) else 1)

@@ -311,7 +311,8 @@ def main():
     old = get_json(CONFIG, {}) or {}
     cfg = {"claude_name": a.claude_name, "partner_name": a.partner_name, "codex_thread": a.thread, "work_dirs": work,
            "installed_at": old.get("installed_at") or time.time(),
-           "handoff_thread": old.get("handoff_thread")}
+           "handoff_thread": old.get("handoff_thread"),
+           "install_id": os.urandom(6).hex()}   # a new id every install: team/verify_link.py then needs a fresh round trip
     try:
         if use_svc:
             for n in SERVICES:   # nothing may deliver while routing changes

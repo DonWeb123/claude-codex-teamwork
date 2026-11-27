@@ -154,8 +154,10 @@ try:
     open(CONFIG, "w").write(cb)
     rc, out = run(os.path.join(ROOT, "install.py"), "--thread", A, "--partner-name", "renamed", "--skip-tests")
     check("renaming the partner on the same chat refused", rc != 0 and "names are fixed" in out, out[-200:])
+    iid = cfg().get("install_id")
     rc, out = install(A)
     check("reinstall on the same chat: first message not repeated", rc == 0 and "not repeated" in out, out[-200:])
+    check("every install gets a new install id (so an old link check never counts)", iid and cfg().get("install_id") not in (None, iid))
     # the Python path changed since the last install (upgrade / different interpreter): no duplicates, old ones migrated
     st = json.load(open(SETTINGS))
     for g in st["hooks"].values():
