@@ -224,7 +224,9 @@ try:
     json.dump({"claude_name": "claude", "partner_name": "astra", "codex_thread": A, "work_dirs": [ROOT]}, open(E2["TEAMKIT_CONFIG"], "w"))
     procs = [subprocess.Popen([sys.executable, os.path.join(ROOT, sc), "run"], env=E2, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
              for sc in ("team/wakerd.py", "team/commhealth.py")]
-    time.sleep(1.5)
+    end = time.time() + 30   # wait until both have really started (pid files written); Windows can take several seconds
+    while time.time() < end and not all(os.path.exists(os.path.join(E2["TEAMKIT_DATA"], "wake", f"{n}.pid.json")) for n in ("wakerd", "commhealth")):
+        time.sleep(0.2)
     r = subprocess.run([sys.executable, os.path.join(ROOT, "uninstall.py")], capture_output=True, text=True, env=E2, cwd=ROOT, timeout=60)
     time.sleep(0.3)
     check("no launchctl (Linux): uninstall stops manually started daemons and says so", r.returncode == 0 and r.stdout.count("stopped") >= 2
