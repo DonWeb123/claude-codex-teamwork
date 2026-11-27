@@ -148,8 +148,11 @@ lands only when that turn ends, unless the partner checks its inbox between step
   - v3 suite: 5/5, including one test on Astra's **real** session log. 16 legacy checks gave identical results on v2 and v3.
   - Mid-turn hook: 7/7 pipe tests, then 12/12 controls after three review rounds by Astra.
   - Idle hook and monitor revision: 17/17.
-  - This kit: **29/29** core tests (`tests/run_tests.py`) and **27/27** install/uninstall tests (`tests/test_install.py`,
-    fake home folder). GitHub Actions runs both on **Windows, Ubuntu and macOS** with Python 3.10 and 3.13 on every push. Astra reviewed the kit's privacy and safety over several rounds before release.
+  - This kit: **29/29** core tests (`tests/run_tests.py`) and **33/33** install/uninstall tests (`tests/test_install.py`,
+    fake home folder). GitHub Actions runs both on **Windows, Ubuntu and macOS** with Python 3.10 and 3.13 on every push.
+  - Live check with a real Claude Code (v2.1.332, macOS): the exec-form mid-turn hook showed Claude new mail during a tool
+    call, and the idle hook woke Claude for it after its turn ended. On Windows the same hooks are covered by CI but have not
+    yet been checked against a live Claude Code; the setup's last step (the partner's first answer reaching Claude) checks it. Astra reviewed the kit's privacy and safety over several rounds before release.
 
 ### 3.3 Token efficiency
 

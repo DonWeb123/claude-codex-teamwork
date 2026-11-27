@@ -44,9 +44,32 @@ def threads():
     return sorted(latest.values(), reverse=True)
 
 
-def hook_cmd(name):
-    """double-quoted, forward-slash paths: the same command works in bash, Git Bash and cmd (spaces in folder names too)"""
-    return f"{compat.q(sys.executable)} {compat.q(os.path.join(ROOT, 'team', 'hooks', name))}"
+def hook_path(name):
+    return os.path.join(ROOT, "team", "hooks", name)
+
+
+def hook_spec(name):
+    """exec form: Claude Code starts python directly with the script as its argument - no shell involved, so it behaves the same
+    on macOS, Linux and Windows (Git Bash or PowerShell), and folder names with spaces need no quoting"""
+    return {"type": "command", "command": sys.executable, "args": [hook_path(name)]}
+
+
+def is_ours(h, name):
+    """exactly this kit's hook for `name`: the current exec form, or a shell form written by an earlier version (migrated)"""
+    p = hook_path(name)
+    if h.get("args") is not None:
+        return h.get("command") == sys.executable and h.get("args") == [p]
+    import shlex
+    legacy = {f"python3 {p}", f"python3 {shlex.quote(p)}", f"{compat.q(sys.executable)} {compat.q(p)}"}
+    return h.get("command") in legacy
+
+
+def ours_any(h):
+    return is_ours(h, "idle_wake.py") or is_ours(h, "midturn.py")
+
+
+def hook_cmd(name):   # kept for older callers
+    return hook_spec(name)["command"]
 
 
 def load_settings():
@@ -62,7 +85,9 @@ def load_settings():
     ok = isinstance(H, dict) and all(
         isinstance(groups, list) and all(
             isinstance(g, dict) and isinstance(g.get("hooks", []), list)
-            and all(isinstance(h, dict) and isinstance(h.get("command", ""), str) for h in g.get("hooks", []))
+            and all(isinstance(h, dict) and isinstance(h.get("command", ""), str)
+                    and (h.get("args") is None or (isinstance(h["args"], list) and all(isinstance(x, str) for x in h["args"])))
+                    for h in g.get("hooks", []))
             for g in groups)
         for groups in H.values())
     if not ok:
@@ -71,12 +96,14 @@ def load_settings():
 
 
 def backup_settings():
-    """unique, owner-only (0600) backup created BEFORE any byte is copied into it; returns (path, original bytes)"""
+    """unique backup created BEFORE any byte is copied into it, kept NEXT TO the settings file (in your user profile, so it is
+    exactly as private as the original on every system - never in the shareable kit folder); 0600 where the OS supports it"""
     if not os.path.exists(SETTINGS):
         return None, None
     with open(SETTINGS, "rb") as f:
         data = f.read()
-    b = os.path.join(DATA, f"settings.backup.{time.strftime('%Y%m%d-%H%M%S')}.{os.getpid()}.{os.urandom(3).hex()}.json")
+    d = os.path.join(os.path.dirname(SETTINGS), "teamkit-backups"); os.makedirs(d, mode=0o700, exist_ok=True)
+    b = os.path.join(d, f"settings.backup.{time.strftime('%Y%m%d-%H%M%S')}.{os.getpid()}.{os.urandom(3).hex()}.json")
     fd = os.open(b, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "wb") as f:
         f.write(data)
@@ -109,12 +136,15 @@ def add_hooks():
     s = load_settings()
     os.makedirs(os.path.dirname(SETTINGS), exist_ok=True)
     H = s.setdefault("hooks", {})
-    want = {"Stop": ({"type": "command", "command": hook_cmd("idle_wake.py"), "timeout": 21600, "asyncRewake": True}, None),
-            "SessionStart": ({"type": "command", "command": hook_cmd("idle_wake.py"), "timeout": 21600, "asyncRewake": True}, None),
-            "PostToolUse": ({"type": "command", "command": hook_cmd("midturn.py"), "timeout": 10}, "*")}
-    for ev, (h, matcher) in want.items():
+    for ev in list(H):   # migrate: drop this kit's hooks written by an earlier version (shell form), keep everything else
+        H[ev] = [dict(g, hooks=[x for x in g.get("hooks", []) if not (x.get("args") is None and ours_any(x))]) for g in H[ev]]
+        H[ev] = [g for g in H[ev] if g["hooks"]]
+    want = {"Stop": (dict(hook_spec("idle_wake.py"), timeout=21600, asyncRewake=True), None, "idle_wake.py"),
+            "SessionStart": (dict(hook_spec("idle_wake.py"), timeout=21600, asyncRewake=True), None, "idle_wake.py"),
+            "PostToolUse": (dict(hook_spec("midturn.py"), timeout=10), "*", "midturn.py")}
+    for ev, (h, matcher, name) in want.items():
         groups = H.setdefault(ev, [])
-        if any(x.get("command") == h["command"] for g in groups for x in g.get("hooks", [])):
+        if any(is_ours(x, name) for g in groups for x in g.get("hooks", [])):
             continue
         g = {"hooks": [h]}
         if matcher:
@@ -200,6 +230,8 @@ def main():
         load_settings()
         if not a.no_services:
             for n in SERVICES:
+                if services.backend() != "manual" and services.running_pid(n) == services.UNKNOWN:
+                    raise SetupError("could not inspect running processes, so services cannot be checked safely. Nothing was changed.")
                 if not services.owned(n):
                     raise SetupError(f"{services.unit_file(n)} belongs to another copy of this kit: run that copy's uninstall.py first. Nothing was changed.")
     except SetupError as e:

@@ -39,19 +39,18 @@ for n in services.NAMES:
     p = services.unit_file(n)
     if not services.owned(n):
         print(f"left {p} alone: it belongs to another copy or program"); continue
-    had = (p and os.path.exists(p)) or services.running_pid(n)
+    had = (p and os.path.exists(p)) or services.running_pid(n) not in (None,)
     if services.remove(n):
         if had:
             print("stopped", n)
     else:
         failed.append(n); print(f"WARNING: {n} did not stop; its auto-start file was kept" + (f": {p}" if p else ""))
-mine = {install.hook_cmd("idle_wake.py"), install.hook_cmd("midturn.py")}
-if any(h.get("command") in mine for g in s.get("hooks", {}).values() for x in g for h in x.get("hooks", [])):
+if any(install.ours_any(h) for g in s.get("hooks", {}).values() for x in g for h in x.get("hooks", [])):
     install.backup_settings()
     for ev in list(s["hooks"]):
         groups = []
         for g in s["hooks"][ev]:
-            g["hooks"] = [h for h in g.get("hooks", []) if h.get("command") not in mine]   # exact match only
+            g["hooks"] = [h for h in g.get("hooks", []) if not install.ours_any(h)]   # exact match only (current + earlier forms)
             if g["hooks"]:
                 groups.append(g)
         if groups:

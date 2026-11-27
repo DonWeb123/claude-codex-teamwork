@@ -91,7 +91,9 @@ try:
     open(SETTINGS, "w").write(json.dumps({"hooks": {"Stop": [{"hooks": ["not-an-object"]}]}}))
     rc, out = install(A)
     check("malformed nested hook refused, nothing changed", rc != 0 and cfg() is None and "unexpected shape" in out, out[-200:])
-    open(SETTINGS, "w").write(good)
+    legacy = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": f"python3 {os.path.join(ROOT, 'team', 'hooks', 'idle_wake.py')}"}]},
+                                 {"hooks": [{"type": "command", "command": "echo other"}]}]}}
+    good = json.dumps(legacy); open(SETTINGS, "w").write(good)
     # first install whose first message cannot be sent -> full rollback to "never installed"
     blocker = os.path.join(DATA, "msgs", "M0001.json")   # a folder where the first message must go: the send fails on every OS
     os.makedirs(blocker)
@@ -103,6 +105,14 @@ try:
     pid = pid_of("com.claudecodexteam.wakerd")
     check("fresh install: both services running our program", rc == 0 and alive(pid) and alive(pid_of("com.claudecodexteam.commhealth")), out[-400:])
     check("fresh install: heartbeat came from the launched daemon", "from the started pid" in out, out[-300:])
+    hooks = json.load(open(SETTINGS))["hooks"]
+    flat = [h for g in hooks.values() for x in g for h in x["hooks"]]
+    check("hooks use exec form (python + script path, no shell) and the old shell-form hook was migrated away",
+          any(h.get("command") == sys.executable and h.get("args") == [os.path.join(ROOT, "team", "hooks", "idle_wake.py")] for h in flat)
+          and not any(h.get("command", "").startswith("python3 ") for h in flat) and any(h.get("command") == "echo other" for h in flat), flat)
+    bks = os.listdir(os.path.join(HOME, ".claude", "teamkit-backups"))
+    check("settings backups live next to the settings (user profile), not in the kit folder",
+          bks and not [f for f in os.listdir(DATA) if f.startswith("settings.backup")], bks)
     time.sleep(1.5)
     check("fresh install: first message woke chat A", any(A in c for c in calls()), calls())
     # start-up failure on a reinstall -> services back to RUNNING, settings byte-identical
@@ -132,7 +142,15 @@ try:
                     "--subject", "ROUTE-TEST", "--body", "x"], env=ENV, capture_output=True)
     time.sleep(1.5)
     check("config edited to chat B: the wake daemon still refuses to deliver to B", not any(B in c for c in calls()[n1:])
-          and "routing refused" in open(os.path.join(DATA, "wake", "alerts.jsonl")).read())
+          and "disagrees with this mailbox's binding on codex_thread" in open(os.path.join(DATA, "wake", "alerts.jsonl")).read())
+    open(CONFIG, "w").write(cb)
+    c = json.load(open(CONFIG)); c["partner_name"] = "renamed"; json.dump(c, open(CONFIG, "w"))
+    n2 = len(calls())
+    subprocess.run([sys.executable, os.path.join(ROOT, "team", "team.py"), "send", "--as", "claude", "--to", "astra", "--type", "FYI", "--re", "none",
+                    "--subject", "DRIFT-TEST", "--body", "x"], env=ENV, capture_output=True)
+    time.sleep(1.5)
+    check("names edited in config.json: delivery stops with an alert instead of guessing", not calls()[n2:]
+          and "disagrees with this mailbox's binding" in open(os.path.join(DATA, "wake", "alerts.jsonl")).read(), calls()[n2:])
     open(CONFIG, "w").write(cb)
     rc, out = run(os.path.join(ROOT, "install.py"), "--thread", A, "--partner-name", "renamed", "--skip-tests")
     check("renaming the partner on the same chat refused", rc != 0 and "names are fixed" in out, out[-200:])
@@ -183,6 +201,16 @@ try:
     for p in procs:
         if p.poll() is None:
             p.kill()
+    # a second health monitor is refused while one runs (Linux-style manual start twice)
+    first = subprocess.Popen([sys.executable, os.path.join(ROOT, "team", "commhealth.py"), "run"], env=E2, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(1.0)
+    second = subprocess.run([sys.executable, os.path.join(ROOT, "team", "commhealth.py"), "run"], env=E2, capture_output=True, text=True, timeout=30)
+    check("a second health monitor refuses to start", second.returncode != 0 and "already running" in second.stderr, second.stderr[-200:])
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "uninstall.py")], capture_output=True, text=True, env=E2, cwd=ROOT, timeout=60)
+    time.sleep(0.3)
+    check("...and uninstall stops the one that runs", r.returncode == 0 and first.poll() is not None, r.stdout[-200:])
+    if first.poll() is None:
+        first.kill()
     # Windows back-end (Startup folder + windowless start), exercised on every OS
     SD = os.path.join(T, "startup")
     E3 = dict(ENV, TEAMKIT_DATA=os.path.join(T, "data-win"), TEAMKIT_CONFIG=os.path.join(T, "config-win.json"),
@@ -195,6 +223,11 @@ try:
     check("Windows back-end: setup starts both services and writes their Startup files",
           r.returncode == 0 and len(recs) == 2 and all(alive(x["pid"]) for x in recs) and len(os.listdir(SD)) == 2
           and "from the started pid" in r.stdout, (r.stdout + r.stderr)[-400:])
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "uninstall.py")], capture_output=True, text=True,
+                       env=dict(E3, TEAMKIT_SIMULATE_PS_FAILURE="1"), cwd=ROOT, timeout=120)
+    check("Windows back-end: unknown process state -> uninstall reports incomplete and keeps the Startup files",
+          r.returncode != 0 and "INCOMPLETE" in (r.stdout + r.stderr) and len(os.listdir(SD)) == 2 and all(alive(x["pid"]) for x in recs),
+          (r.stdout + r.stderr)[-300:])
     r = subprocess.run([sys.executable, os.path.join(ROOT, "uninstall.py")], capture_output=True, text=True, env=E3, cwd=ROOT, timeout=120)
     time.sleep(0.5)
     check("Windows back-end: uninstall stops both and removes the Startup files",

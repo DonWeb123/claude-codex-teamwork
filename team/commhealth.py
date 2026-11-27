@@ -100,6 +100,10 @@ if __name__ == "__main__":
     if c == "once":
         print("\n".join(tick()))
     elif c == "run":
+        try:
+            lk = compat.lock(os.path.join(W, "commhealth.lock"), blocking=False)
+        except compat.Busy:
+            sys.exit("another commhealth is already running")
         write_pid("commhealth")
         while True:
             try:

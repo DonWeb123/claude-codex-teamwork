@@ -80,14 +80,18 @@ def _launchd_pid(n):
     return int(pid) if pid and pid.isdigit() else None
 
 
+UNKNOWN = -1   # the process table could not be inspected
+
+
 def running_pid(n):
-    """pid of OUR running service n, verified by command line (and start time when recorded), else None"""
+    """pid of OUR running service n, verified by command line (and start time when recorded); None = not running;
+    UNKNOWN = cannot tell (inspection failed) - callers must never treat that as stopped"""
     if backend() == "launchd":
         pid = _launchd_pid(n)
         try:
             info = compat.proc_info(pid) if pid else None
         except OSError:
-            info = None
+            return UNKNOWN
         return pid if info and compat.args_has(info["args"], script(n)) else None
     rec = get_json(os.path.join(DATA, "wake", f"{n}.pid.json")) or {}
     if not isinstance(rec.get("pid"), int):
@@ -95,7 +99,7 @@ def running_pid(n):
     try:
         info = compat.proc_info(rec["pid"])
     except OSError:
-        return None
+        return UNKNOWN
     if info and compat.args_has(info["args"], script(n)) and info["start"] == rec.get("start"):
         return rec["pid"]
     return None
@@ -104,6 +108,8 @@ def running_pid(n):
 def stop(n):
     """stop OUR service n and wait until its process is really gone. True = stopped (or was not running)"""
     pid = running_pid(n)
+    if pid == UNKNOWN:
+        return False   # cannot verify: report incomplete, keep the auto-start file
     if backend() == "launchd":
         p = unit_file(n)
         if os.path.exists(p):
@@ -142,7 +148,7 @@ def start(n):
         _spawn(n)
     for _ in range(40):
         pid = running_pid(n)
-        if pid and (b == "launchd" or (get_json(os.path.join(DATA, "wake", f"{n}.pid.json")) or {}).get("t", t0) >= t0 - 1):
+        if pid and pid != UNKNOWN and (b == "launchd" or (get_json(os.path.join(DATA, "wake", f"{n}.pid.json")) or {}).get("t", t0) >= t0 - 1):
             return pid
         time.sleep(0.25)
     raise RuntimeError(f"{n} is not running our program (see {os.path.join(DATA, 'logs', n + '.log')})")

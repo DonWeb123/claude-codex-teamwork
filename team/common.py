@@ -11,10 +11,27 @@ for d in ("msgs", "acks", "evidence", "locks", "wake", "hooks", "logs"):
     os.makedirs(os.path.join(DATA, d), exist_ok=True)
 
 
-def cfg():
+def raw_cfg():
     c = dict(DEFAULTS)
     c.update(get_json(CONFIG, {}) or {})
     return c
+
+
+IDENTITY = ("codex_thread", "partner_name", "claude_name")
+
+
+def cfg():
+    """config.json, except that the chat and both names always come from the mailbox binding when there is one"""
+    c = raw_cfg(); b = binding()
+    if b:
+        c.update({k: b[k] for k in IDENTITY})
+    return c
+
+
+def identity_mismatch():
+    """the IDENTITY fields where config.json disagrees with the binding ([] = consistent or no binding yet)"""
+    b = binding(); c = raw_cfg()
+    return [k for k in IDENTITY if b and c.get(k) != b[k]]
 
 
 def get_json(path, default=None):

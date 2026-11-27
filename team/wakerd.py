@@ -13,7 +13,7 @@ Reacts to new mail within ~0.2-0.5 s (watches the mailbox folder), with a 10 s b
 import calendar, glob, json, os, re, subprocess, sys, time, uuid
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import compat
-from common import DATA, cfg, get_json, put_json, msgs, acked, answered, alert, find_codex, codex_home, team_cmd, binding, write_pid
+from common import DATA, cfg, get_json, put_json, msgs, acked, answered, alert, find_codex, codex_home, team_cmd, binding, write_pid, raw_cfg, identity_mismatch
 
 W = os.path.join(DATA, "wake")
 REWAKE_S, MAX_WAKES, NOSTART_S, REPLY_DEADLINE_S = 900, 3, 300, 2700
@@ -92,7 +92,7 @@ def queue(text):
     if DRY:
         return "DRY", "dry run"
     b = binding()   # delivery goes ONLY to the chat this mailbox is bound to, whatever config.json says
-    if not b or b["codex_thread"] != C.get("codex_thread"):
+    if not b or b["codex_thread"] != raw_cfg().get("codex_thread"):
         return None, "routing refused: config.json chat does not match this mailbox's binding (team-data/binding.json)"
     codex = find_codex()
     if not codex:
@@ -109,6 +109,12 @@ def queue(text):
 
 
 def tick(now=None, ps_out=None):
+    bad = identity_mismatch()
+    if bad:   # never guess who is who: stop delivering and tell Claude
+        alert("identity|" + ",".join(f"{k}={raw_cfg().get(k)}" for k in bad), "WAKE FAILED",
+              f"config.json disagrees with this mailbox's binding on {', '.join(bad)}: no mail delivered until it matches team-data/binding.json")
+        put_json(os.path.join(W, "heartbeat.json"), {"t": time.time(), "ts": time.strftime("%F %T"), "pid": os.getpid(), "blocked": bad})
+        return []
     C = cfg(); P, ME = C["partner_name"], C["claude_name"]; now = now or time.time()
     M = msgs()
     b = get_json(os.path.join(W, "baseline.json"))

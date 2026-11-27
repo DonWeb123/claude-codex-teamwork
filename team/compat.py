@@ -48,6 +48,8 @@ def _powershell(script):
 def proc_info(pid):
     """{'args': command line, 'start': start-time text} for a RUNNING process, None if it is gone (zombies count as gone),
     raises OSError if the process table cannot be inspected"""
+    if os.environ.get("TEAMKIT_SIMULATE_PS_FAILURE") == "1":   # tests: behave as if the process table cannot be read
+        raise OSError("simulated inspection failure")
     if WINDOWS:
         rows = _powershell(f"Get-CimInstance Win32_Process -Filter 'ProcessId={int(pid)}' | Select-Object CommandLine,CreationDate | ConvertTo-Json -Compress")
         if rows is None:
