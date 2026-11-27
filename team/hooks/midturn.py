@@ -7,8 +7,9 @@ Guarantees (each one came from a review round):
   - a message file that cannot be read yet stops the scan at that id (retried); after 5 tries it is reported, never skipped
   - one updater at a time (lock); the alert log is tracked by inode + offset, complete lines only
   - never blocks or fails a tool: any error = silent exit 0.  Kill switch: team-data/hooks/OFF or MIDTURN_OFF"""
-import fcntl, json, os, sys, time
+import json, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import compat
 from common import DATA, cfg, get_json, put_json, in_work_dirs, team_cmd
 
 H = os.path.join(DATA, "hooks"); ST = os.path.join(H, "midturn_state.json")
@@ -25,10 +26,9 @@ def main():
         hook = {}
     if not in_work_dirs(hook.get("cwd") or os.getcwd()):
         return
-    lk = open(os.path.join(H, "midturn.lock"), "w")
     try:
-        fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
+        lk = compat.lock(os.path.join(H, "midturn.lock"), blocking=False)  # noqa: F841 (held until exit)
+    except compat.Busy:
         return
     me = cfg()["claude_name"]
     names = [n for n in os.listdir(os.path.join(DATA, "msgs")) if n.startswith("M") and n.endswith(".json") and n[1:-5].isdigit()]

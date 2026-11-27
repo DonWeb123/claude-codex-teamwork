@@ -11,6 +11,7 @@ import math, os, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import DATA, cfg, get_json, put_json, msgs, alert, write_pid
 from wakerd import iso, codex_appservers
+import compat
 
 W = os.path.join(DATA, "wake"); H = os.path.join(DATA, "hooks")
 PAGE_AGE_S, TARGET_P90 = 600, 60
@@ -68,12 +69,7 @@ def tick(now=None, ps_out=None):
         p9 = pct(s, .9)
         out.append(f"- {d}: seen {len(s)}/{len(L)}, p50 {pct(s, .5)} s, p90 {p9} s{' (OVER TARGET)' if p9 is not None and p9 >= TARGET_P90 else ''}; reply p50 {pct(rp, .5)} s (n={len(rp)})")
     hb = get_json(os.path.join(W, "heartbeat.json"))
-    if ps_out is None:
-        try:
-            ps_out = subprocess.run(["ps", "-axo", "pid=,lstart=,command="], capture_output=True, text=True, timeout=10).stdout
-        except Exception:
-            ps_out = ""
-    procs = codex_appservers(ps_out) if ps_out.strip() else None
+    procs = compat.codex_appservers() if ps_out is None else (codex_appservers(ps_out) if ps_out.strip() else None)
     out.append(f"- wake daemon heartbeat: {round(now - hb['t']) if hb else 'missing'} s ago; Codex apps running: {len(procs) if procs is not None else 'unknown'}")
     out.append(f"- unseen messages: {len(pending)}" + (f"; oldest {max(pending, key=lambda x: x[2])[1]} ({round(max(x[2] for x in pending))} s)" if pending else ""))
     causes = {}

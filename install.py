@@ -13,17 +13,15 @@ and the services are put back exactly as they were, so mail keeps going where it
   5. a first message to the partner with the team rules
 One copy of the kit = one partner chat. To pair with a different Codex chat, use a fresh copy of the kit in another folder
 (the old mailbox is never shown to a new chat).   Undo everything: python3 uninstall.py"""
-import argparse, fcntl, json, os, plistlib, re, shlex, subprocess, sys, time
+import argparse, json, os, re, subprocess, sys, time
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(ROOT, "team"))
 from common import DATA, CONFIG, find_codex, codex_home, get_json, put_json, team_cmd, msgs, binding as valid_binding
+import compat, services
 
-SETTINGS = os.path.expanduser("~/.claude/settings.json")
-AGENTS = os.path.expanduser("~/Library/LaunchAgents")
-SERVICES = {"wakerd": "team/wakerd.py", "commhealth": "team/commhealth.py"}
-LAUNCHCTL = os.environ.get("TEAMKIT_LAUNCHCTL", "launchctl")   # tests substitute a fake
-HAS_LAUNCHD = (sys.platform == "darwin" and os.environ.get("TEAMKIT_NO_LAUNCHD") != "1") or "TEAMKIT_LAUNCHCTL" in os.environ   # TEAMKIT_NO_LAUNCHD=1 simulates Linux in tests
+SETTINGS = os.environ.get("TEAMKIT_CLAUDE_SETTINGS") or os.path.expanduser("~/.claude/settings.json")
+SERVICES = services.NAMES
 BINDING = os.path.join(DATA, "binding.json")   # which chat + names this mailbox belongs to; kept with the mail, not in config
 NAME_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 
@@ -47,7 +45,8 @@ def threads():
 
 
 def hook_cmd(name):
-    return "python3 " + shlex.quote(os.path.join(ROOT, "team", "hooks", name))   # quoted: folders with spaces work
+    """double-quoted, forward-slash paths: the same command works in bash, Git Bash and cmd (spaces in folder names too)"""
+    return f"{compat.q(sys.executable)} {compat.q(os.path.join(ROOT, 'team', 'hooks', name))}"
 
 
 def load_settings():
@@ -124,95 +123,29 @@ def add_hooks():
     put_json(SETTINGS, s); print("  hooks added to", SETTINGS)
 
 
-def plist(name, script):
-    label = f"com.claudecodexteam.{name}"
-    log = os.path.join(DATA, "logs", f"{name}.log")
-    return label, plistlib.dumps({"Label": label, "ProgramArguments": [sys.executable, os.path.join(ROOT, script), "run"],
-                                  "WorkingDirectory": ROOT, "RunAtLoad": True, "KeepAlive": True,
-                                  "StandardOutPath": log, "StandardErrorPath": log})
-
-
-def plist_owned(label, script):
-    """True if no plist exists or it is OURS (same label + same program in this folder); False = someone else's file"""
-    p = os.path.join(AGENTS, label + ".plist")
-    if not os.path.exists(p):
-        return True
-    try:
-        with open(p, "rb") as f:
-            d = plistlib.load(f)
-        return d.get("Label") == label and (d.get("ProgramArguments") or [None, None])[1:2] == [os.path.join(ROOT, script)]
-    except Exception:
-        return False
-
-
-def gone(pid):
-    """True when the process no longer runs (absent, or a zombie that only waits to be reaped)"""
-    st = subprocess.run(["ps", "-p", str(pid), "-o", "stat="], capture_output=True, text=True).stdout.strip()
-    return not st or st.startswith("Z")
-
-
-def service_pid(label):
-    out = subprocess.run([LAUNCHCTL, "list", label], capture_output=True, text=True).stdout
-    pid = next((l.split("=")[1].strip(" ;") for l in out.splitlines() if '"PID"' in l), None)
-    return int(pid) if pid and pid.isdigit() else None
-
-
-def stop_service(n):
-    """unload this copy's service and wait until its process is really gone; returns True when stopped"""
-    label = f"com.claudecodexteam.{n}"; p = os.path.join(AGENTS, label + ".plist")
-    if not os.path.exists(p):
-        return True
-    pid = service_pid(label)
-    subprocess.run([LAUNCHCTL, "unload", p], capture_output=True)
-    for _ in range(20):
-        if service_pid(label) is None and (pid is None or gone(pid)):
-            return True
-        time.sleep(0.5)
-    return False
-
-
 def start_services():
-    """(re)start both services; raises SetupError unless both run OUR program and the daemon we launched writes a fresh heartbeat"""
-    if not HAS_LAUNCHD:
-        print("  not macOS: start these yourself and keep them running:")
-        for s in SERVICES.values():
-            print(f"    nohup python3 {shlex.quote(os.path.join(ROOT, s))} run >/dev/null 2>&1 &")
+    """(re)start both services and require a fresh heartbeat from the wake daemon we just started; raises SetupError"""
+    if services.backend() == "manual":
+        print("  this system has no supported auto-start: start these yourself and keep them running:")
+        for c in services.manual_commands():
+            print("    " + c)
         print("  to stop them later: python3 uninstall.py (it checks each one really exited)")
         return
-    os.makedirs(AGENTS, exist_ok=True); pids = {}; t_launch = time.time()
-    for n, s in SERVICES.items():
-        label, data = plist(n, s); p = os.path.join(AGENTS, label + ".plist")
-        if not stop_service(n):
-            raise SetupError(f"the old {label} did not stop")
-        with open(p, "wb") as f:
-            f.write(data)
-        r = subprocess.run([LAUNCHCTL, "load", p], capture_output=True, text=True)
-        if r.returncode != 0:
-            raise SetupError(f"{label} failed to load: {r.stderr.strip()}")
-        pid = None
-        for _ in range(20):
-            pid = service_pid(label)
-            if pid:
-                break
-            time.sleep(0.5)
-        args = subprocess.run(["ps", "-ww", "-p", str(pid), "-o", "args="], capture_output=True, text=True).stdout if pid else ""
-        if not pid or os.path.join(ROOT, s) not in args:
-            raise SetupError(f"{label} is not running our program (see {os.path.join(DATA, 'logs', n + '.log')})")
-        pids[n] = pid; print(f"  service {label}: running (pid {pid})")
-    hb_p = os.path.join(DATA, "wake", "heartbeat.json")
-    for _ in range(30):   # the heartbeat must come from the daemon we just launched, after its launch
-        hb = get_json(hb_p) or {}
-        if hb.get("pid") == pids["wakerd"] and hb.get("t", 0) >= t_launch:
-            print("  wake daemon heartbeat: OK (from the launched pid)"); return
-        time.sleep(0.5)
-    raise SetupError("no fresh heartbeat from the launched wake daemon after 15 s")
-
-
-def remove_services():
+    t0 = time.time(); pids = {}
     for n in SERVICES:
-        p = os.path.join(AGENTS, f"com.claudecodexteam.{n}.plist")
-        if os.path.exists(p) and stop_service(n):
-            os.remove(p)
+        if not services.stop(n):
+            raise SetupError(f"the old {n} did not stop")
+        try:
+            pids[n] = services.start(n)
+        except RuntimeError as e:
+            raise SetupError(str(e))
+        print(f"  service {n}: running (pid {pids[n]}, {services.backend()})")
+    for _ in range(60):   # the heartbeat must come from the daemon we just started, after it started
+        hb = get_json(os.path.join(DATA, "wake", "heartbeat.json")) or {}
+        if hb.get("pid") == pids["wakerd"] and hb.get("t", 0) >= t0:
+            print("  wake daemon heartbeat: OK (from the started pid)"); return
+        time.sleep(0.25)
+    raise SetupError("no fresh heartbeat from the started wake daemon after 15 s")
 
 
 def main():
@@ -235,10 +168,9 @@ def main():
         if not codex:
             print("WARNING: the Codex command-line tool was not found (it ships inside the Codex VS Code extension / app).")
         return
-    lk = open(os.path.join(DATA, "locks", "install.lock"), "w")   # one install/uninstall at a time
-    try:
-        fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
+    try:   # one install/uninstall at a time
+        lk = compat.lock(os.path.join(DATA, "locks", "install.lock"), blocking=False)  # noqa: F841
+    except compat.Busy:
         sys.exit("another install or uninstall of this kit is running")
     # ---- validate EVERYTHING before changing anything
     try:
@@ -266,10 +198,10 @@ def main():
             raise SetupError(f"This copy's names are fixed: partner {bind.get('partner_name')!r}, Claude {bind.get('claude_name')!r} "
                              "(renaming would hide unanswered mail). Rerun with those names, or use a fresh copy. Nothing was changed.")
         load_settings()
-        if not a.no_services and HAS_LAUNCHD:
-            for n, sc in SERVICES.items():
-                if not plist_owned(f"com.claudecodexteam.{n}", sc):
-                    raise SetupError(f"~/Library/LaunchAgents/com.claudecodexteam.{n}.plist belongs to another copy of this kit: run that copy's uninstall.py first. Nothing was changed.")
+        if not a.no_services:
+            for n in SERVICES:
+                if not services.owned(n):
+                    raise SetupError(f"{services.unit_file(n)} belongs to another copy of this kit: run that copy's uninstall.py first. Nothing was changed.")
     except SetupError as e:
         sys.exit(str(e))
     if not a.skip_tests:
@@ -277,25 +209,25 @@ def main():
         if subprocess.run([sys.executable, os.path.join(ROOT, "tests", "run_tests.py")]).returncode != 0:
             sys.exit("Self-tests failed: nothing was installed or changed. Show this output to Claude.")
     work = [os.path.realpath(os.path.expanduser(d)) for d in (a.work_dir or [ROOT])]
-    if ROOT not in work:
-        work.append(ROOT)
+    if os.path.realpath(ROOT) not in work:
+        work.append(os.path.realpath(ROOT))
     # ---- transaction: remember the exact earlier state, roll back on any failure
     W = os.path.join(DATA, "wake")
     keep = {CONFIG: read_bytes(CONFIG), SETTINGS: read_bytes(SETTINGS),
             os.path.join(W, "baseline.json"): read_bytes(os.path.join(W, "baseline.json")),
             os.path.join(W, "partner_log.json"): read_bytes(os.path.join(W, "partner_log.json"))}
-    had_services = {n: read_bytes(os.path.join(AGENTS, f"com.claudecodexteam.{n}.plist")) for n in SERVICES}
-    use_launchd = not a.no_services and HAS_LAUNCHD
-    was_running = {n: service_pid(f"com.claudecodexteam.{n}") is not None for n in SERVICES} if use_launchd else {}
+    use_svc = not a.no_services and services.backend() != "manual"
+    had_services = {n: read_bytes(services.unit_file(n)) for n in SERVICES} if use_svc else {}
+    was_running = {n: services.running_pid(n) is not None for n in SERVICES} if use_svc else {}
     keep[BINDING] = read_bytes(BINDING)
     old = get_json(CONFIG, {}) or {}
     cfg = {"claude_name": a.claude_name, "partner_name": a.partner_name, "codex_thread": a.thread, "work_dirs": work,
            "installed_at": old.get("installed_at") or time.time(),
            "handoff_thread": old.get("handoff_thread")}
     try:
-        if use_launchd:
+        if use_svc:
             for n in SERVICES:   # nothing may deliver while routing changes
-                if not stop_service(n):
+                if not services.stop(n):
                     raise SetupError(f"could not stop the running {n}")
         ids = [int(m["id"][1:]) for m in msgs() if str(m.get("id", ""))[1:].isdigit()]
         if not os.path.exists(os.path.join(W, "baseline.json")):   # wake only for mail sent from now on (incl. the first message below)
@@ -310,8 +242,8 @@ def main():
         else:
             body = (f"Hello {a.partner_name}, this is {a.claude_name}. We now share a mailbox so we can work as a team. "
                     f"Rules: {os.path.join(ROOT, 'AGENTS.md')} (please read it once). Every message reaches you as a wake in this chat. Reply with: "
-                    f"{team_cmd()} send --as {a.partner_name} --to {a.claude_name} --type ANSWER --re <id> --subject '...' --body '...'. "
-                    f"During long work, check {team_cmd()} inbox --as {a.partner_name} between steps. Please ANSWER this message to prove the link works.")
+                    f"{team_cmd(True)} send --as {a.partner_name} --to {a.claude_name} --type ANSWER --re <id> --subject '...' --body '...'. "
+                    f"During long work, check {team_cmd(True)} inbox --as {a.partner_name} between steps. Please ANSWER this message to prove the link works.")
             r = subprocess.run([sys.executable, os.path.join(ROOT, "team", "team.py"), "send", "--as", a.claude_name, "--to", a.partner_name,
                                 "--type", "HANDOFF", "--re", "none", "--subject", "Team link is live: please read the rules and answer", "--body", body],
                                capture_output=True, text=True)
@@ -322,25 +254,25 @@ def main():
             print("5. first message to the partner:", r.stdout.strip())
     except (SetupError, OSError, subprocess.SubprocessError) as e:
         print(f"\nSETUP FAILED: {e}\nPutting everything back as it was ...")
-        if use_launchd:
-            remove_services()
+        if use_svc:
+            for n in SERVICES:
+                services.remove(n)
         for path, data in keep.items():
             restore_file(path, data)
         bad = []
-        if use_launchd:
-            for n, data in had_services.items():   # put back each service file, and its running/stopped state
-                p = os.path.join(AGENTS, f"com.claudecodexteam.{n}.plist")
+        if use_svc:
+            for n, data in had_services.items():   # put back each service's unit file, and its running/stopped state
+                if was_running.get(n):
+                    try:
+                        services.start(n)
+                    except RuntimeError:
+                        bad.append(n)
+                p = services.unit_file(n)
                 if data is not None:
                     with open(p, "wb") as f:
                         f.write(data)
-                if was_running.get(n):
-                    subprocess.run([LAUNCHCTL, "load", p], capture_output=True)
-                    for _ in range(20):
-                        if service_pid(f"com.claudecodexteam.{n}"):
-                            break
-                        time.sleep(0.5)
-                    else:
-                        bad.append(n)
+                elif os.path.exists(p) and not was_running.get(n):
+                    os.remove(p)
         if bad:
             sys.exit(f"Rolled back config and Claude settings, but could NOT restart: {', '.join(bad)}. Show this output to Claude.")
         sys.exit("Rolled back: config, Claude settings and services are as before. Show this output to Claude.")
@@ -350,7 +282,7 @@ def main():
     elif os.path.exists(off):
         print("  NOTE: hooks stay OFF because team-data/hooks/OFF exists (you created it). Delete it to turn them on.")
     print(f"\nDone. Restart Claude Code in {ROOT} so the hooks load, then check the link with:\n"
-          f"  python3 {shlex.quote(os.path.join(ROOT, 'team', 'commhealth.py'))} once")
+          f"  {compat.q(sys.executable)} {compat.q(os.path.join(ROOT, 'team', 'commhealth.py'))} once")
 
 
 if __name__ == "__main__":

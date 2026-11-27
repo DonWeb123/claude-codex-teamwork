@@ -8,8 +8,9 @@ then prints a short notice and exits 2 - which starts a new Claude turn. Read-on
   - one waiter at a time (lock); every arm/wake/exit is logged to team-data/hooks/receipts.jsonl
   - each message is announced once, plus one reminder if still unacked after 20 min
   - exits 0 before the hook timeout; the next Stop arms a fresh waiter"""
-import fcntl, json, os, sys, time
+import json, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import compat
 from common import DATA, cfg, get_json, put_json, msgs, acked, in_work_dirs, team_cmd
 
 H = os.path.join(DATA, "hooks")
@@ -58,14 +59,12 @@ def main():
         hook = {}
     if os.path.exists(os.path.join(H, "OFF")) or not in_work_dirs(hook.get("cwd") or os.getcwd()):
         return 0
-    lk = open(os.path.join(H, "waiter.lock"), "w")
     try:
-        fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
+        lk = compat.lock(os.path.join(H, "waiter.lock"), blocking=False)  # noqa: F841 (held until exit)
+    except compat.Busy:
         return 0
     me = cfg()["claude_name"]; t0 = time.time()
-    import subprocess
-    start = subprocess.run(["ps", "-p", str(os.getpid()), "-o", "lstart="], capture_output=True, text=True).stdout.strip()
+    start = compat.my_start()
     put_json(os.path.join(H, "waiter.json"), {"pid": os.getpid(), "start": start, "since": t0, "session": hook.get("session_id")})
     log("armed", event=hook.get("hook_event_name"), session=hook.get("session_id"))
     cur_p = os.path.join(H, "alert_cursor.json")

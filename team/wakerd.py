@@ -10,8 +10,9 @@ partner's Codex session log (both the old `event_msg/user_message` and the newer
   - a reply-wanted message unanswered for 45 min -> REPLY OVERDUE (either direction)
 Reacts to new mail within ~0.2-0.5 s (watches the mailbox folder), with a 10 s backstop tick. One instance (lock).
   python3 wakerd.py run | once | status        TEAMKIT_DRY=1 = never call codex, never notify"""
-import calendar, fcntl, glob, json, os, re, subprocess, sys, time, uuid
+import calendar, glob, json, os, re, subprocess, sys, time, uuid
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import compat
 from common import DATA, cfg, get_json, put_json, msgs, acked, answered, alert, find_codex, codex_home, team_cmd, binding, write_pid
 
 W = os.path.join(DATA, "wake")
@@ -69,29 +70,17 @@ def partner_events(thread, state):
 
 
 def codex_appservers(ps_out):
-    r = []
-    for line in ps_out.splitlines():
-        f = line.split()
-        if len(f) < 7:
-            continue
-        exe, args = f[6], f[7:]
-        if os.path.basename(exe) == "codex" and "app-server" in args:
-            r.append(" ".join(f[:6]))
-    return sorted(r)
+    return compat.parse_ps_appservers(ps_out)
 
 
 def restart_check(ps_out=None):
     if ps_out is None:
-        try:
-            r = subprocess.run(["ps", "-axo", "pid=,lstart=,command="], capture_output=True, text=True, timeout=10)
-            if r.returncode != 0:
-                return
-            ps_out = r.stdout
-        except Exception:
-            return
-    if not ps_out.strip():
-        return   # an empty process table is an inspection failure, never a restart
-    cur = codex_appservers(ps_out); p = os.path.join(W, "codex_procs.json"); prev = get_json(p)
+        cur = compat.codex_appservers()   # None = could not inspect
+    else:
+        cur = codex_appservers(ps_out) if ps_out.strip() else None
+    if cur is None:
+        return   # an inspection failure is never a restart
+    p = os.path.join(W, "codex_procs.json"); prev = get_json(p)
     if prev is not None and cur != prev.get("procs") and cur:
         alert("codexrestart|" + ",".join(c.split()[0] for c in cur), "CODEX RESTARTED",
               f"Codex restarted: open the {cfg()['partner_name']} chat in the Codex panel once so wakes start turns again")
@@ -109,7 +98,8 @@ def queue(text):
     if not codex:
         return None, "codex CLI not found"
     try:
-        r = subprocess.run([codex, "queue", "--thread", C["codex_thread"], "--message", text], capture_output=True, text=True, timeout=60)
+        cmd = [sys.executable, codex] if codex.endswith(".py") else [codex]   # tests use a Python stand-in
+        r = subprocess.run(cmd + ["queue", "--thread", C["codex_thread"], "--message", text], capture_output=True, text=True, timeout=60)
         out = (r.stdout + r.stderr)[-300:]
         if r.returncode != 0:
             return None, out
@@ -168,7 +158,7 @@ def tick(now=None, ps_out=None):
         marker = "wake:" + uuid.uuid4().hex[:12]
         text = (f"[{marker}] Team mailbox: {len(due)} new message(s) for you ({sum(1 for m in due if m.get('reply'))} need a reply): "
                 + "; ".join(f"{m['id']} {m['subject'][:60]}" for m in due)
-                + f". Read with: {team_cmd()} inbox --as {P} ; answer with {team_cmd()} send --as {P} --to {ME} --re <id> ...")
+                + f". Read with: {team_cmd(True)} inbox --as {P} ; answer with {team_cmd(True)} send --as {P} --to {ME} --re <id> ...")
         for m in due:   # record the intent BEFORE submitting, so a crash cannot lose it
             p = os.path.join(W, f"{m['id']}.wakes.json"); s = get_json(p, {"wakes": []})
             s["wakes"].append({"t": now, "marker": marker, "busy_at_queue": st2.get("busy")}); put_json(p, s)
@@ -217,10 +207,9 @@ if __name__ == "__main__":
     if c in ("run", "once"):
         if not cfg().get("codex_thread") and not DRY:
             sys.exit("no codex_thread in config.json: run install.py first")
-        lk = open(os.path.join(W, "daemon.lock"), "w")
         try:
-            fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
+            lk = compat.lock(os.path.join(W, "daemon.lock"), blocking=False)
+        except compat.Busy:
             sys.exit("another wakerd is already running")
         if c == "run":
             write_pid("wakerd")

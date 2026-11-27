@@ -12,9 +12,10 @@
 Types that ask for a reply: ASK PROPOSE REVIEW BLOCK HANDOFF.  Others: ANSWER AGREE OBJECT RESULT FYI CLAIM.
 Rules built in: max 220 words (put detail in files and point to them with --refs); a '?' needs a reply-wanted type;
 if the other agent is waiting on you, say which message you answer (--re ID) or that this is a new topic (--re none)."""
-import argparse, fcntl, hashlib, os, re, shutil, sys, time
+import argparse, hashlib, os, re, shutil, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import DATA, cfg, get_json, put_json, msgs, acked
+import compat
 
 C = cfg()
 WHO = (C["claude_name"], C["partner_name"], "owner")
@@ -24,9 +25,7 @@ MAX_WORDS = 220
 
 
 def lock():
-    f = open(os.path.join(DATA, "locks", ".lock"), "w")
-    fcntl.flock(f, fcntl.LOCK_EX)
-    return f
+    return compat.lock(os.path.join(DATA, "locks", ".lock"))
 
 
 def keep(path):

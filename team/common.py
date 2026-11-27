@@ -1,5 +1,7 @@
 """Shared helpers for the Claude + Codex teamwork kit. Plain files only: nothing is lost when an app restarts."""
-import glob, json, os, shutil, tempfile, time
+import glob, json, os, shutil, sys, tempfile, time
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import compat  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.environ.get("TEAMKIT_DATA") or os.path.join(ROOT, "team-data")
@@ -28,7 +30,13 @@ def put_json(path, obj):
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".tmp.")
     with os.fdopen(fd, "w") as f:
         json.dump(obj, f, indent=1)
-    os.replace(tmp, path)
+    for i in range(50):   # Windows refuses to replace a file another process has open for a moment: retry briefly
+        try:
+            os.replace(tmp, path); return
+        except PermissionError:
+            if i == 49:
+                raise
+            time.sleep(0.02)
 
 
 def msgs():
@@ -60,18 +68,18 @@ def alert(key, kind, text, notify=True):
     put_json(seen_p, seen)
     with open(os.path.join(DATA, "wake", "alerts.jsonl"), "a") as f:
         f.write(json.dumps({"ts": time.strftime("%F %T"), "t": time.time(), "key": key, "kind": kind, "text": text}) + "\n")
-    if notify and os.environ.get("TEAMKIT_DRY") != "1" and shutil.which("osascript"):
-        import subprocess
-        subprocess.run(["osascript", "-e", f"display notification {json.dumps(text[:180])} with title {json.dumps('Team kit: ' + kind)}"], capture_output=True)
+    if notify:
+        compat.notify("Team kit: " + kind, text)
     return True
 
 
 def in_work_dirs(cwd):
     if not cwd:
         return False
-    cwd = os.path.realpath(cwd)
+    norm = lambda p: os.path.normcase(os.path.realpath(os.path.expanduser(p)))   # Windows paths are case-insensitive
+    cwd = norm(cwd)
     for d in cfg()["work_dirs"]:
-        d = os.path.realpath(os.path.expanduser(d))
+        d = norm(d)
         if cwd == d or cwd.startswith(d + os.sep):
             return True
     return False
@@ -84,9 +92,10 @@ def find_codex():
     p = shutil.which("codex")
     if p:
         return p
-    pats = ["~/.vscode/extensions/openai.chatgpt-*/bin/*/codex", "~/.cursor/extensions/openai.chatgpt-*/bin/*/codex",
-            "/Applications/Codex.app/Contents/Resources/codex"]
-    hits = [h for pat in pats for h in glob.glob(os.path.expanduser(pat)) if os.access(h, os.X_OK)]
+    pats = ["~/.vscode/extensions/openai.chatgpt-*/bin/*/codex*", "~/.cursor/extensions/openai.chatgpt-*/bin/*/codex*",
+            "/Applications/Codex.app/Contents/Resources/codex", "~/AppData/Local/Programs/Codex/resources/codex.exe"]
+    hits = [h for pat in pats for h in glob.glob(os.path.expanduser(pat))
+            if os.path.basename(h).lower() in ("codex", "codex.exe") and os.path.isfile(h) and os.access(h, os.X_OK)]
     return sorted(hits, key=os.path.getmtime)[-1] if hits else None
 
 
@@ -106,11 +115,11 @@ def binding():
 
 def write_pid(name):
     """record a running daemon (pid + start time) so a manual stop can verify it is ours"""
-    import subprocess
-    st = subprocess.run(["ps", "-p", str(os.getpid()), "-o", "lstart="], capture_output=True, text=True).stdout.strip()
-    put_json(os.path.join(DATA, "wake", f"{name}.pid.json"), {"pid": os.getpid(), "start": st})
+    put_json(os.path.join(DATA, "wake", f"{name}.pid.json"), {"pid": os.getpid(), "start": compat.my_start(), "script": os.path.abspath(sys.argv[0]), "t": time.time()})
 
 
-def team_cmd():
-    import shlex
-    return "python3 " + shlex.quote(os.path.join(ROOT, "team", "team.py"))   # quoted: folders with spaces work
+def team_cmd(for_partner=False):
+    """how to run the mailbox tool. Claude's shell (bash, Git Bash, cmd) takes "python" "path";
+    Codex on Windows runs PowerShell, which needs the call operator & in front of a quoted program."""
+    py = compat.q(sys.executable); tool = compat.q(os.path.join(ROOT, "team", "team.py"))
+    return f"& {py} {tool}" if (for_partner and compat.WINDOWS) else f"{py} {tool}"

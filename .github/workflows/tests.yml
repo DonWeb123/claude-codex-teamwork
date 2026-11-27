@@ -1,0 +1,20 @@
+name: tests
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        python: ["3.9", "3.13"]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: core tests
+        run: python tests/run_tests.py
+      - name: install / uninstall tests
+        run: python tests/test_install.py
